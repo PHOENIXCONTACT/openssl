@@ -24,6 +24,18 @@
 
 /* CAdES services */
 
+/* extract the time of stamping from the timestamp token */
+static int ossl_cms_cades_extract_timestamp(PKCS7 *token, time_t *stamp_time) {
+    TS_TST_INFO *tst_info = PKCS7_to_TS_TST_INFO(token);
+    const ASN1_GENERALIZEDTIME *atime = TS_TST_INFO_get_time(tst_info);
+    struct tm tm;
+    if (ASN1_TIME_to_tm(atime, &tm)) {
+        *stamp_time = mktime(&tm);
+        return 1;
+    }
+    return 0;
+}
+
 /* Calculate the hash over the provided object, which is the Signature within SignerInfo */
 static int ossl_cms_cades_compute_imprint(PKCS7 *token, ASN1_OCTET_STRING *os, unsigned char **imprint, unsigned int *imprint_len) {
     TS_TST_INFO *tst_info = PKCS7_to_TS_TST_INFO(token);
@@ -79,7 +91,7 @@ err:
 
 /* The Timestamp Token comes inside a (unsigned) X509 attribute of SignerInfo. */
 /* The token is in PKCS7 format and needs to be converted from its still encoded form */
-int ossl_cms_handle_CAdES_SignatureTimestampToken(X509_ATTRIBUTE *tsattr, X509_STORE *store, ASN1_OCTET_STRING *os) {
+int ossl_cms_handle_CAdES_SignatureTimestampToken(X509_ATTRIBUTE *tsattr, X509_STORE *store, ASN1_OCTET_STRING *os, time_t *stamp_time) {
     int ret = 0, f = 0;
     TS_VERIFY_CTX *verify_ctx= NULL;
     ASN1_TYPE *type = X509_ATTRIBUTE_get0_type(tsattr, 0);
@@ -100,6 +112,11 @@ int ossl_cms_handle_CAdES_SignatureTimestampToken(X509_ATTRIBUTE *tsattr, X509_S
     verify_ctx = TS_VERIFY_CTX_new();
     if (verify_ctx == NULL)
         goto err;
+
+    if (!ossl_cms_cades_extract_timestamp(token, stamp_time)) {
+        fprintf(stderr, "failed to extact stamping time\n");
+        goto err;
+    }
 
     f |= TS_VFY_IMPRINT;
     if (!ossl_cms_cades_compute_imprint(token, os, &imprint, &imprint_len))
