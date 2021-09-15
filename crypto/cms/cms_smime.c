@@ -263,7 +263,8 @@ static int cms_signerinfo_verify_cert(CMS_SignerInfo *si,
                                       STACK_OF(X509) *certs,
                                       STACK_OF(X509_CRL) *crls,
                                       STACK_OF(X509) **chain,
-                                      const CMS_CTX *cms_ctx)
+                                      const CMS_CTX *cms_ctx,
+                                      time_t *verification_time)
 {
     X509_STORE_CTX *ctx;
     X509 *signer;
@@ -284,6 +285,8 @@ static int cms_signerinfo_verify_cert(CMS_SignerInfo *si,
     if (crls != NULL)
         X509_STORE_CTX_set0_crls(ctx, crls);
 
+    if (verification_time)
+	X509_STORE_CTX_set_time(ctx, 0, *verification_time);
     i = X509_verify_cert(ctx);
     if (i <= 0) {
         j = X509_STORE_CTX_get_error(ctx);
@@ -313,6 +316,7 @@ int CMS_verify(CMS_ContentInfo *cms, STACK_OF(X509) *certs,
     X509 *signer;
     int i, scount = 0, ret = 0;
     BIO *cmsbio = NULL, *tmpin = NULL, *tmpout = NULL;
+    time_t verification_time, *vt = NULL;
     int cadesVerify = (flags & CMS_CADES) != 0;
     const CMS_CTX *ctx = ossl_cms_get0_cmsctx(cms);
 
@@ -349,6 +353,44 @@ int CMS_verify(CMS_ContentInfo *cms, STACK_OF(X509) *certs,
         goto err;
     }
 
+    /*
+     * Extract timestamp, if available, to set the correct time for certificate validation.
+     * Timestamp (and archive-timestamps) are taken from the unsigned attributes anyway,
+     * so it does not matter when they are evaluated.
+     */
+    if (cadesVerify) {
+        int num, j;
+        for (i = 0; i < scount; i++) {
+            si = sk_CMS_SignerInfo_value(sinfos, i);
+
+            /*
+             * Look for embedded timestamp tokens and archiveTimestamps, note: there can be more
+             * than one
+             */
+            num = CMS_unsigned_get_attr_count(si);
+            if (num < 0)
+                continue;
+            for (j = 0; j < num; j++) {
+                X509_ATTRIBUTE *attr = CMS_unsigned_get_attr(si, j);
+                ASN1_OBJECT *obj = X509_ATTRIBUTE_get0_object(attr);
+                switch (OBJ_obj2nid(obj)) {
+                    case (NID_id_smime_aa_timeStampToken):
+                        fprintf(stderr, "Found timeStampToken attribute\n");
+                        if (!ossl_cms_handle_CAdES_SignatureTimestampToken(attr, store, si->signature, &verification_time))
+                            goto err;
+                        /* timestamp verification was successfull, so we hat a valid time */
+                        vt = &verification_time;
+                        break;
+                    case NID_id_aa_ets_archiveTimestampV3:
+                        fprintf(stderr, "found archiveTimestampV3 attribute\n");
+                        break;
+                    default:
+                        ; /* don't care */
+                }
+            }
+        }
+    }
+
     /* Attempt to verify all signers certs */
     /* at this point scount == sk_CMS_SignerInfo_num(sinfos) */
 
@@ -367,9 +409,10 @@ int CMS_verify(CMS_ContentInfo *cms, STACK_OF(X509) *certs,
         for (i = 0; i < scount; i++) {
             si = sk_CMS_SignerInfo_value(sinfos, i);
 
+            /* vt is NULL unless a valid timestamp was found */
             if (!cms_signerinfo_verify_cert(si, store, cms_certs, crls,
                                             si_chains ? &si_chains[i] : NULL,
-                                            ctx))
+                                            ctx, vt))
                 goto err;
         }
     }
@@ -377,7 +420,7 @@ int CMS_verify(CMS_ContentInfo *cms, STACK_OF(X509) *certs,
     /* Attempt to verify all SignerInfo signed attribute signatures */
 
     if ((flags & CMS_NO_ATTR_VERIFY) == 0 || cadesVerify) {
-	int num, j, loc;
+	int loc;
         for (i = 0; i < scount; i++) {
             si = sk_CMS_SignerInfo_value(sinfos, i);
             if (CMS_signed_get_attr_count(si) < 0)
@@ -389,28 +432,6 @@ int CMS_verify(CMS_ContentInfo *cms, STACK_OF(X509) *certs,
 
                 if (ossl_cms_check_signing_certs(si, si_chain) <= 0)
                     goto err;
-
-                /*
-                 * Look for embedded timestamp tokens and archiveTimestamps, note: there can be more
-                 * than one
-                 */
-                num = CMS_unsigned_get_attr_count(si);
-                for (j = 0; j < num; j++) {
-                    X509_ATTRIBUTE *attr = CMS_unsigned_get_attr(si, j);
-                    ASN1_OBJECT *obj = X509_ATTRIBUTE_get0_object(attr);
-                    switch (OBJ_obj2nid(obj)) {
-                        case (NID_id_smime_aa_timeStampToken):
-                            fprintf(stderr, "Found timeStampToken attribute\n");
-                            if (!ossl_cms_handle_CAdES_SignatureTimestampToken(attr, store, si->signature))
-                                fprintf(stderr, "SignatureTimeStamp validation failure\n");
-                            break;
-                        case NID_id_aa_ets_archiveTimestampV3:
-                            fprintf(stderr, "found archiveTimestampV3 attribute\n");
-                            break;
-                        default:
-                            ; /* don't care */
-                    }
-                }
 
                 /* Do we have a signingTime attribute in the signed attributes?? */
                 loc = CMS_signed_get_attr_by_NID(si, NID_pkcs9_signingTime, -1);
