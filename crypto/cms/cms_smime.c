@@ -13,6 +13,7 @@
 #include <openssl/x509v3.h>
 #include <openssl/err.h>
 #include <openssl/cms.h>
+#include <openssl/ts.h>
 #include "cms_local.h"
 #include "crypto/asn1.h"
 
@@ -395,8 +396,10 @@ int CMS_verify(CMS_ContentInfo *cms, STACK_OF(X509) *certs,
                 if (ossl_cms_check_signing_certs(si, si_chain) <= 0)
                     goto err;
             }
+#if 0
 	    num = CMS_signed_get_attr_count(si);
 	    fprintf(stderr, "Found %d signed attributes\n", num);
+#endif
 	    /* Do we have a signingTime attribute? */
 
 {
@@ -413,8 +416,8 @@ int CMS_verify(CMS_ContentInfo *cms, STACK_OF(X509) *certs,
 			fprintf(stderr, "  tag=%d (%s)\n", tag, ASN1_tag2str(tag));
 			if (tag == V_ASN1_UTCTIME || tag == V_ASN1_GENERALIZEDTIME) {
 				struct tm tm;
-				ASN1_TIME *tt = type->value.ptr;
-				if (ossl_asn1_time_to_tm(&tm, tt)) {
+				ASN1_TIME *tt = X509_ATTRIBUTE_get0_data(attr, 0, tag, NULL);
+				if (ASN1_TIME_to_tm(tt, &tm)) {
 					char buffer[27];
 					strftime(buffer, 26, "%Y:%m:%d %H:%M:%S", &tm);
 					fprintf(stderr, "    time=%s\n", buffer);
@@ -435,16 +438,41 @@ int CMS_verify(CMS_ContentInfo *cms, STACK_OF(X509) *certs,
 	   fprintf(stderr, "Found signingTime\n");
 	}
 }
+	{
 	    for (j = 0; j < num; j++) {
 		X509_ATTRIBUTE *attr = CMS_signed_get_attr(si, j);
 		if (attr) {
 			char buf[1000];
 			i2t_ASN1_OBJECT(buf, sizeof(buf) -1, X509_ATTRIBUTE_get0_object(attr));
-			fprintf(stderr, "Attribute %s found,\n", buf);
+			fprintf(stderr, "  Signed Attribute %s found,\n", buf);
 		}
 	    }
 
         }
+	{
+		num = CMS_unsigned_get_attr_count(si);
+		fprintf(stderr, "Found %d unsigned attributes\n", num);
+		for (j = 0; j < num; j++) {
+			X509_ATTRIBUTE *attr = CMS_unsigned_get_attr(si, j);
+			if (attr) {
+				char buf[1000];
+				i2t_ASN1_OBJECT(buf, sizeof(buf) -1, X509_ATTRIBUTE_get0_object(attr));
+				fprintf(stderr, "  Unsigned Attribute %s found,\n", buf);
+			}
+		}
+		int loc = CMS_unsigned_get_attr_by_NID(si, NID_id_smime_aa_timeStampToken, -1);
+		if (loc >= 0) {
+		fprintf(stderr, "found token attribute\n");
+		X509_ATTRIBUTE *attr = CMS_unsigned_get_attr(si, loc);
+		ASN1_OCTET_STRING *os = si->signature;
+
+#if 1
+		if (!ossl_cms_handle_CAdES_SignatureTimestampToken(attr, store, os))
+			fprintf(stderr, "Failed to hanlde timestamp\n");
+#endif
+	}
+	}
+	}
     }
 
 
