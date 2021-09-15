@@ -383,7 +383,7 @@ int CMS_verify(CMS_ContentInfo *cms, STACK_OF(X509) *certs,
     /* Attempt to verify all SignerInfo signed attribute signatures */
 
     if ((flags & CMS_NO_ATTR_VERIFY) == 0 || cadesVerify) {
-	int num, j;
+	int num, j, loc;
         for (i = 0; i < scount; i++) {
             si = sk_CMS_SignerInfo_value(sinfos, i);
             if (CMS_signed_get_attr_count(si) < 0)
@@ -395,83 +395,48 @@ int CMS_verify(CMS_ContentInfo *cms, STACK_OF(X509) *certs,
 
                 if (ossl_cms_check_signing_certs(si, si_chain) <= 0)
                     goto err;
-            }
-#if 0
-	    num = CMS_signed_get_attr_count(si);
-	    fprintf(stderr, "Found %d signed attributes\n", num);
-#endif
-	    /* Do we have a signingTime attribute? */
 
-{
-	fprintf(stderr, "Searching for signingTime\n");
-	int loc = CMS_signed_get_attr_by_NID(si, NID_pkcs9_signingTime, -1);
-	if (loc > 0) {
-		fprintf(stderr, "signingTime is at location %d\n", loc);
-		X509_ATTRIBUTE *attr = CMS_signed_get_attr(si, loc);
-		ASN1_OBJECT *obj = X509_ATTRIBUTE_get0_object(attr);
-		ASN1_TYPE *type = X509_ATTRIBUTE_get0_type(attr, 0);
-		if (type && obj) {
-			int tag = ASN1_TYPE_get(type);
-			fprintf(stderr, "  Found type and object\n");
-			fprintf(stderr, "  tag=%d (%s)\n", tag, ASN1_tag2str(tag));
-			if (tag == V_ASN1_UTCTIME || tag == V_ASN1_GENERALIZEDTIME) {
-				struct tm tm;
-				ASN1_TIME *tt = X509_ATTRIBUTE_get0_data(attr, 0, tag, NULL);
-				if (ASN1_TIME_to_tm(tt, &tm)) {
-					char buffer[27];
-					strftime(buffer, 26, "%Y:%m:%d %H:%M:%S", &tm);
-					fprintf(stderr, "    time=%s\n", buffer);
-				}
-			} else {
-				fprintf(stderr, "    Strange type of singingTime\n");
-			}
-		}
-	}
+                /*
+                 * Look for embedded timestamp tokens and archiveTimestamps, note: there can be more
+                 * than one
+                 */
+                num = CMS_unsigned_get_attr_count(si);
+                for (j = 0; j < num; j++) {
+                    X509_ATTRIBUTE *attr = CMS_unsigned_get_attr(si, j);
+                    ASN1_OBJECT *obj = X509_ATTRIBUTE_get0_object(attr);
+                    switch (OBJ_obj2nid(obj)) {
+                        case (NID_id_smime_aa_timeStampToken):
+                            fprintf(stderr, "Found timeStampToken attribute\n");
+                            if (!ossl_cms_handle_CAdES_SignatureTimestampToken(attr, store, si->signature))
+                                fprintf(stderr, "SignatureTimeStamp validation failure\n");
+                            break;
+                        case NID_id_aa_ets_archiveTimestampV3:
+                            fprintf(stderr, "found archiveTimestampV3 attribute\n");
+                            break;
+                        default:
+                            ; /* don't care */
+                    }
+                }
 
-	ASN1_OBJECT *obj = OBJ_nid2obj(NID_pkcs9_signingTime);
-	ASN1_OCTET_STRING *str = CMS_signed_get0_data_by_OBJ(si, obj, -3, V_ASN1_OCTET_STRING);
-	if (str) {
-	   fprintf(stderr, "Got ASN1_STRING\n");
-	}
-	ASN1_TIME *t = NULL;
-	if (t) {
-	   fprintf(stderr, "Found signingTime\n");
-	}
-}
-	{
-	    for (j = 0; j < num; j++) {
-		X509_ATTRIBUTE *attr = CMS_signed_get_attr(si, j);
-		if (attr) {
-			char buf[1000];
-			i2t_ASN1_OBJECT(buf, sizeof(buf) -1, X509_ATTRIBUTE_get0_object(attr));
-			fprintf(stderr, "  Signed Attribute %s found,\n", buf);
-		}
+                /* Do we have a signingTime attribute in the signed attributes?? */
+                loc = CMS_signed_get_attr_by_NID(si, NID_pkcs9_signingTime, -1);
+                if (loc > 0) {
+                    X509_ATTRIBUTE *attr = CMS_signed_get_attr(si, loc);
+                    ASN1_TYPE *type = X509_ATTRIBUTE_get0_type(attr, 0);
+                    int tag = ASN1_TYPE_get(type);
+                    if (tag == V_ASN1_UTCTIME || tag == V_ASN1_GENERALIZEDTIME) {
+                        struct tm tm;
+                        ASN1_TIME *tt = X509_ATTRIBUTE_get0_data(attr, 0, tag, NULL);
+                        if (ASN1_TIME_to_tm(tt, &tm)) {
+                            char buffer[27];
+                            strftime(buffer, 26, "%Y:%m:%d %H:%M:%S", &tm);
+                            fprintf(stderr, "Found signingTime in singerInfos:    time=%s\n", buffer);
+                        }
+                    } else {
+                        fprintf(stderr, "    Strange type of singingTime\n");
+                    }
+                }
 	    }
-
-        }
-	{
-		num = CMS_unsigned_get_attr_count(si);
-		fprintf(stderr, "Found %d unsigned attributes\n", num);
-		for (j = 0; j < num; j++) {
-			X509_ATTRIBUTE *attr = CMS_unsigned_get_attr(si, j);
-			if (attr) {
-				char buf[1000];
-				i2t_ASN1_OBJECT(buf, sizeof(buf) -1, X509_ATTRIBUTE_get0_object(attr));
-				fprintf(stderr, "  Unsigned Attribute %s found,\n", buf);
-			}
-		}
-		int loc = CMS_unsigned_get_attr_by_NID(si, NID_id_smime_aa_timeStampToken, -1);
-		if (loc >= 0) {
-		fprintf(stderr, "found token attribute\n");
-		X509_ATTRIBUTE *attr = CMS_unsigned_get_attr(si, loc);
-		ASN1_OCTET_STRING *os = si->signature;
-
-#if 1
-		if (!ossl_cms_handle_CAdES_SignatureTimestampToken(attr, store, os))
-			fprintf(stderr, "Failed to hanlde timestamp\n");
-#endif
-	}
-	}
 	}
     }
 
