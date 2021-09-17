@@ -414,3 +414,10 @@ int CMS_SharedInfo_encode(unsigned char **pder, X509_ALGOR *kekalg,
     intsi.pecsi = &ecsi;
     return ASN1_item_i2d(intsi.a, pder, ASN1_ITEM_rptr(CMS_SharedInfo));
 }
+
+ASN1_SEQUENCE(CMS_ATSHashIndexV3) = {
+  ASN1_SIMPLE(CMS_ATSHashIndexV3, hashIndAlgorithm, X509_ALGOR),
+  ASN1_SEQUENCE_OF(CMS_ATSHashIndexV3, certificatesHashIndex, ASN1_OCTET_STRING),
+  ASN1_SEQUENCE_OF(CMS_ATSHashIndexV3, crlsHashIndex, ASN1_OCTET_STRING),
+  ASN1_SEQUENCE_OF(CMS_ATSHashIndexV3, unsignedAttrValuesHashIndex, ASN1_OCTET_STRING),
+} ASN1_SEQUENCE_END(CMS_ATSHashIndexV3)
