@@ -385,7 +385,7 @@ int CMS_verify(CMS_ContentInfo *cms, STACK_OF(X509) *certs,
                         break;
                     case NID_id_aa_ets_archiveTimestampV3:
                         fprintf(stderr, "found archiveTimestampV3 attribute\n");
-                        ossl_cms_handle_CAdES_ArchiveTimestampV3Token(attr, store);
+                        ossl_cms_handle_CAdES_ArchiveTimestampV3Token(attr, store, cms->d.signedData);
                         break;
                     default:
                         ; /* don't care */
