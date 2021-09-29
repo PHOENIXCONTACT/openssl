@@ -26,14 +26,16 @@
 
 /* extract the time of stamping from the timestamp token */
 static int ossl_cms_cades_extract_timestamp(PKCS7 *token, time_t *stamp_time) {
+    int ret = 0;
     TS_TST_INFO *tst_info = PKCS7_to_TS_TST_INFO(token);
     const ASN1_GENERALIZEDTIME *atime = TS_TST_INFO_get_time(tst_info);
     struct tm tm;
     if (ASN1_TIME_to_tm(atime, &tm)) {
         *stamp_time = mktime(&tm);
-        return 1;
+        ret = 1;
     }
-    return 0;
+    TS_TST_INFO_free(tst_info);
+    return ret;
 }
 
 static EVP_MD *ossl_cms_cades_get_md(PKCS7 *token) {
@@ -65,6 +67,7 @@ static EVP_MD *ossl_cms_cades_get_md(PKCS7 *token) {
     if (md == NULL)
 	md = (EVP_MD *)EVP_get_digestbyname(name);
 err:
+    TS_TST_INFO_free(tst_info);
     return md;
 }
 
@@ -151,14 +154,16 @@ err:
         OPENSSL_free(imprint);
     EVP_MD_CTX_free(md_ctx);
     EVP_MD_free(md);
+    M_ASN1_free_of(token, PKCS7);
     return ret;
 }
 
-static int verify_digest(EVP_MD *md, ASN1_OCTET_STRING *digest, ASN1_OCTET_STRING *object) {
+static int verify_digest(EVP_MD *md, ASN1_OCTET_STRING *digest, unsigned char *data, size_t length) {
     EVP_MD_CTX *md_ctx = NULL;
     unsigned char imprint[EVP_MAX_MD_SIZE];
     int ret = 0;
 
+fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
     if (EVP_MD_get_size(md) != digest->length) {
         fprintf(stderr, "Invalid digest size\n");
         goto err;
@@ -172,7 +177,7 @@ static int verify_digest(EVP_MD *md, ASN1_OCTET_STRING *digest, ASN1_OCTET_STRIN
     if (!EVP_DigestInit(md_ctx, md))
         goto err;
 
-    if (!EVP_DigestUpdate(md_ctx, object->data, object->length))
+    if (!EVP_DigestUpdate(md_ctx, data, length))
         goto err;
 
     if (!EVP_DigestFinal(md_ctx, imprint, NULL))
@@ -192,6 +197,146 @@ static int verify_digest(EVP_MD *md, ASN1_OCTET_STRING *digest, ASN1_OCTET_STRIN
         ret = 1;
 err:
     EVP_MD_CTX_free(md_ctx);
+    return ret;
+}
+
+static int verify_certificatesHashIndex(EVP_MD *md, CMS_ATSHashIndexV3 *hashindex, CMS_SignedData *signedData) {
+    int k, ret = 0;
+    ASN1_OCTET_STRING *object = NULL;
+    STACK_OF(ASN1_OCTET_STRING) *indexs = hashindex->certificatesHashIndex;
+    STACK_OF(CMS_CertificateChoices) *certchoices = signedData->certificates;
+    int numi = sk_ASN1_OCTET_STRING_num(indexs);
+    if (numi != sk_CMS_CertificateChoices_num(certchoices)) {
+        fprintf(stderr, "Number of CertificateChoices does not match hash list: %d != %d\n", numi, sk_CMS_CertificateChoices_num(certchoices));
+        goto err;
+    }
+    for (k = 0; k < numi; k++) {
+fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
+        ASN1_OCTET_STRING *digest = sk_ASN1_OCTET_STRING_value(indexs, k);
+        CMS_CertificateChoices *cchoice = sk_CMS_CertificateChoices_value(certchoices, numi - 1 - k);
+        object = ASN1_item_pack(cchoice, ASN1_ITEM_rptr(CMS_CertificateChoices), &object);
+        if (object == NULL) {
+            fprintf(stderr, "Failed to pack RevocationInfoChoice\n");
+            goto err;
+        }
+        if (!verify_digest(md, digest, object->data, object->length))
+	    goto err;
+    }
+    ret = 1;
+err:
+    ASN1_STRING_free(object);
+    return ret;
+}
+
+static int verify_crlsHashIndex(EVP_MD *md, CMS_ATSHashIndexV3 *hashindex, CMS_SignedData *signedData) {
+    int k, ret = 0;
+    ASN1_OCTET_STRING *object = NULL;
+    STACK_OF(ASN1_OCTET_STRING) *indexs = hashindex->crlsHashIndex;
+    STACK_OF(CMS_RevocationInfoChoice) *crlchoices = signedData->crls;
+    int numi = sk_ASN1_OCTET_STRING_num(indexs);
+    if (numi != sk_CMS_RevocationInfoChoice_num(crlchoices)) {
+        fprintf(stderr, "Number of RevocationInfoChoice does not match hash list: %d != %d\n", numi, sk_CMS_RevocationInfoChoice_num(crlchoices));
+        goto err;
+    }
+    for (k = 0; k < numi; k++) {
+fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
+        ASN1_OCTET_STRING *digest = sk_ASN1_OCTET_STRING_value(indexs, k);
+        CMS_RevocationInfoChoice *ri = sk_CMS_RevocationInfoChoice_value(crlchoices, numi - 1 - k);
+        object = ASN1_item_pack(ri, ASN1_ITEM_rptr(CMS_RevocationInfoChoice), &object);
+        if (object == NULL) {
+            fprintf(stderr, "Failed to pack RevocationInfoChoice\n");
+            goto err;
+        }
+        if (!verify_digest(md, digest, object->data, object->length))
+	    goto err;
+    }
+    ret = 1;
+err:
+    ASN1_STRING_free(object);
+    return ret;
+}
+
+static int verify_unsignedAttrValuesHashIndex(EVP_MD *md, CMS_ATSHashIndexV3 *hashindex, CMS_SignedData *signedData) {
+    int ret = 0;
+    unsigned char *content = NULL;
+    ASN1_OCTET_STRING *object = NULL;
+    STACK_OF(ASN1_OCTET_STRING) *indexs = hashindex->unsignedAttrValuesHashIndex;
+    STACK_OF(CMS_SignerInfo) *sinfos = signedData->signerInfos;
+    if (sk_CMS_SignerInfo_num(sinfos) != 1) {
+        fprintf(stderr, "Don't know yet how to deal with multiple signatures...\n");
+        goto err;
+    }
+    CMS_SignerInfo *si = sk_CMS_SignerInfo_value(sinfos, 0);
+    int num = CMS_unsigned_get_attr_count(si);
+    int k, numi = sk_ASN1_OCTET_STRING_num(indexs);
+    if (numi != num - 1) {
+        fprintf(stderr, "Expected the last unsignedAttribute to be the V3...\n");
+        goto err;
+    }
+    for (k = 0; k < num; k++) {
+fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
+        ASN1_OCTET_STRING *digest = sk_ASN1_OCTET_STRING_value(indexs, 0);
+        X509_ATTRIBUTE *attr = CMS_unsigned_get_attr(si, num - k - 1);
+        ASN1_OBJECT *obj = X509_ATTRIBUTE_get0_object(attr);
+        object = ASN1_item_pack(obj, ASN1_ITEM_rptr(ASN1_OBJECT), &object);
+        int i, len = object->length;
+        if ((content = OPENSSL_malloc(len)) == NULL) {
+            ERR_raise(ERR_LIB_TS, ERR_R_MALLOC_FAILURE);
+            goto err;
+        };
+        memcpy(content, object->data, object->length);
+#if 0
+{
+int j;
+        for (j=0; j < OBJ_length(obj); j++)
+            fprintf(stderr, "%02X", OBJ_get0_data(obj)[j]);
+        fprintf(stderr, "\n");
+}
+#endif
+        int count = X509_ATTRIBUTE_count(attr);
+fprintf(stderr, "count=%d\n", count);
+        if (count == 0) {
+            ERR_raise(ERR_LIB_X509, X509_R_INVALID_ATTRIBUTES);
+            goto err;
+        }
+        for (i = 0; i < count; i++) {
+fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
+            ASN1_TYPE *type = X509_ATTRIBUTE_get0_type(attr, i);
+            int tag = ASN1_TYPE_get(type);
+            ASN1_OCTET_STRING *os = X509_ATTRIBUTE_get0_data(attr, i, tag, NULL);
+            unsigned char *newcontent = OPENSSL_realloc(content, len + os->length);
+            if (newcontent == NULL) {
+                ERR_raise(ERR_LIB_TS, ERR_R_MALLOC_FAILURE);
+                goto err;
+            }
+#if 0
+{
+int j;
+        for (j=0; j < os->length; j++)
+            fprintf(stderr, "%02X", os->data[j]);
+        fprintf(stderr, "\n");
+}
+#endif
+            memcpy(newcontent + len, os->data, os->length);
+            content = newcontent;
+            len += os->length;
+        }
+fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
+        if (!verify_digest(md, digest, content, len)) {
+#if 0
+            goto err;
+#else
+            ;
+#endif
+        }
+        OPENSSL_free(content);
+        content = NULL;
+    }
+fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
+    ret = 1;
+err:
+    ASN1_STRING_free(object);
+    OPENSSL_free(content);
     return ret;
 }
 
@@ -308,8 +453,6 @@ int ossl_cms_handle_CAdES_ArchiveTimestampV3Token(X509_ATTRIBUTE *tsattr, X509_S
         for (j = 0; j < num; j++) {
             X509_ATTRIBUTE *attr = CMS_unsigned_get_attr(si, j);
             ASN1_OBJECT *obj = X509_ATTRIBUTE_get0_object(attr);
-            STACK_OF(ASN1_OCTET_STRING) *indexs;
-            int k, numi;
             switch (OBJ_obj2nid(obj)) {
                 case (NID_id_aa_ATSHashIndex_v3):
                     fprintf(stderr, "    ATSHashIndex-v3 found \n");
@@ -322,42 +465,17 @@ int ossl_cms_handle_CAdES_ArchiveTimestampV3Token(X509_ATTRIBUTE *tsattr, X509_S
                         ERR_print_errors_fp(stderr);
                         goto err;
                     }
-                    indexs = hashindex->certificatesHashIndex;
-                    STACK_OF(CMS_CertificateChoices) *certchoices = signedData->certificates;
-                    numi = sk_ASN1_OCTET_STRING_num(indexs);
-                    if (numi != sk_CMS_CertificateChoices_num(certchoices)) {
-                        fprintf(stderr, "Number of CertificateChoices does not match hash list: %d != %d\n", numi, sk_CMS_CertificateChoices_num(certchoices));
+
+                    if (!verify_certificatesHashIndex(md, hashindex, signedData))
                         goto err;
-                    }
-                    for (k = 0; k < numi; k++) {
-fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
-		        ASN1_OCTET_STRING *digest = sk_ASN1_OCTET_STRING_value(indexs, k);
-                        CMS_CertificateChoices *cchoice = sk_CMS_CertificateChoices_value(certchoices, numi - 1 - k);
-                        ASN1_OCTET_STRING *object = ASN1_item_pack(cchoice, ASN1_ITEM_rptr(CMS_CertificateChoices), NULL);;
-                        if (!verify_digest(md, digest, object))
-	                    goto err;
-                    }
-                    indexs = hashindex->crlsHashIndex;
-                    STACK_OF(CMS_RevocationInfoChoice) *crlchoices = signedData->crls;
-                    numi = sk_ASN1_OCTET_STRING_num(indexs);
-                    if (numi != sk_CMS_RevocationInfoChoice_num(crlchoices)) {
-                        fprintf(stderr, "Number of RevocationInfoChoice does not match hash list: %d != %d\n", numi, sk_CMS_RevocationInfoChoice_num(crlchoices));
+
+                    if (!verify_crlsHashIndex(md, hashindex, signedData))
                         goto err;
-                    }
-                    for (k = 0; k < numi; k++) {
-fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
-		        ASN1_OCTET_STRING *os = sk_ASN1_OCTET_STRING_value(indexs, k);
-                        if (!EVP_DigestUpdate(md_ctx, os->data, os->length))
-	                    goto err;
-                    }
-                    indexs = hashindex->unsignedAttrValuesHashIndex;
-                    numi = sk_ASN1_OCTET_STRING_num(indexs);
-                    for (k = 0; k < numi; k++) {
-fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
-		        ASN1_OCTET_STRING *os = sk_ASN1_OCTET_STRING_value(indexs, k);
-                        if (!EVP_DigestUpdate(md_ctx, os->data, os->length))
-	                    goto err;
-                    }
+
+                    if (!verify_unsignedAttrValuesHashIndex(md, hashindex, signedData))
+                        goto err;
+
+                    M_ASN1_free_of(hashindex, CMS_ATSHashIndexV3);
                     break;
                 default:
                     ; /* don't care */
@@ -396,7 +514,9 @@ err:
     TS_VERIFY_CTX_free(verify_ctx);
     if (!verify_ctx)	/* TS_VERIFY_CTX_free() frees the imprint... */
         OPENSSL_free(imprint);
+    M_ASN1_free_of(internal_cms, CMS_ContentInfo);
     EVP_MD_CTX_free(md_ctx);
     EVP_MD_free(md);
+    M_ASN1_free_of(token, PKCS7);
     return ret;
 }
