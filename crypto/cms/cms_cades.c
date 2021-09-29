@@ -343,7 +343,7 @@ err:
 /* The Archive Timestamp Token comes inside a (unsigned) X509 attribute of SignerInfo. */
 /* The token is in PKCS7 format and needs to be converted from its still encoded form */
 int ossl_cms_handle_CAdES_ArchiveTimestampV3Token(X509_ATTRIBUTE *tsattr, X509_STORE *store, CMS_SignedData *signedData) {
-    int ret = 0, f = 0;
+    int i, j, num, ret = 0, f = 0;
     TS_VERIFY_CTX *verify_ctx= NULL;
     ASN1_TYPE *type = X509_ATTRIBUTE_get0_type(tsattr, 0);
     int tag = ASN1_TYPE_get(type);
@@ -352,6 +352,10 @@ int ossl_cms_handle_CAdES_ArchiveTimestampV3Token(X509_ATTRIBUTE *tsattr, X509_S
     EVP_MD *md = NULL;
     EVP_MD_CTX *md_ctx = NULL;
     CMS_ContentInfo *internal_cms = ASN1_item_unpack(str, ASN1_ITEM_rptr(CMS_ContentInfo));
+    CMS_SignerInfo *si;
+    STACK_OF(CMS_SignerInfo) *sinfos;
+    ASN1_OBJECT *eContentType = signedData->encapContentInfo->eContentType;
+    CMS_ATSHashIndexV3 *hashindex;
     unsigned char *imprint;
     unsigned int imprint_len = 0;
 
@@ -373,12 +377,6 @@ int ossl_cms_handle_CAdES_ArchiveTimestampV3Token(X509_ATTRIBUTE *tsattr, X509_S
      * Note: Since this relies on CAdES background this work is done on CMS structures
      * instead of PKCS7 structures.
      */
-    {
-    int i, j, num;
-    CMS_SignerInfo *si;
-    STACK_OF(CMS_SignerInfo) *sinfos;
-    ASN1_OBJECT *eContentType = signedData->encapContentInfo->eContentType;
-    CMS_ATSHashIndexV3 *hashindex;
 #if 0
     sinfos = (STACK_OF(CMS_SignerInfo) *)PKCS7_get_signer_info(token);
 #else
@@ -482,9 +480,6 @@ int ossl_cms_handle_CAdES_ArchiveTimestampV3Token(X509_ATTRIBUTE *tsattr, X509_S
             }
         }
     }
-
-    }
-
 
     if (!EVP_DigestFinal(md_ctx, imprint, NULL))
         goto err;
