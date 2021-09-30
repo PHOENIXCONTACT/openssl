@@ -514,5 +514,6 @@ DECLARE_ASN1_ITEM(CMS_RevocationInfoChoice)
 DECLARE_ASN1_ITEM(CMS_SignedData)
 DECLARE_ASN1_ITEM(CMS_CompressedData)
 DECLARE_ASN1_ITEM(CMS_ATSHashIndexV3)
+DECLARE_ASN1_ITEM(CMS_SignerIdentifier)
 
 #endif
