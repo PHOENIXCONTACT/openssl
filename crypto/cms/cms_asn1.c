@@ -35,7 +35,7 @@ ASN1_CHOICE(CMS_CertificateChoices) = {
 ASN1_CHOICE(CMS_SignerIdentifier) = {
         ASN1_SIMPLE(CMS_SignerIdentifier, d.issuerAndSerialNumber, CMS_IssuerAndSerialNumber),
         ASN1_IMP(CMS_SignerIdentifier, d.subjectKeyIdentifier, ASN1_OCTET_STRING, 0)
-} static_ASN1_CHOICE_END(CMS_SignerIdentifier)
+} ASN1_CHOICE_END(CMS_SignerIdentifier)
 
 ASN1_NDEF_SEQUENCE(CMS_EncapsulatedContentInfo) = {
         ASN1_SIMPLE(CMS_EncapsulatedContentInfo, eContentType, ASN1_OBJECT),
