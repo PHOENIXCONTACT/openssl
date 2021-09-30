@@ -413,6 +413,10 @@ int CMS_verify(CMS_ContentInfo *cms, STACK_OF(X509) *certs,
     }
 
     /*
+     * Handle CAdES signatures of higher levels (B-T, B-LT, and B-LTA) that include additional
+     * information packed into the unsigned attributes of the signerInfo elements.
+     * Read this: they are not organized by document but by signer, therefore mulitple
+     * objects may exist.
      * Extract timestamp, if available, to set the correct time for certificate validation.
      * Timestamp (and archive-timestamps) are taken from the unsigned attributes anyway,
      * so it does not matter when they are evaluated.
@@ -437,7 +441,7 @@ int CMS_verify(CMS_ContentInfo *cms, STACK_OF(X509) *certs,
                         fprintf(stderr, "Found timeStampToken attribute\n");
                         if (!ossl_cms_handle_CAdES_SignatureTimestampToken(attr, store, si->signature, &verification_time))
                             goto err;
-                        /* timestamp verification was successfull, so we hat a valid time */
+                        /* timestamp verification was successfull, so we have a valid time */
                         vt = &verification_time;
                         break;
                     case NID_id_aa_ets_archiveTimestampV3:
@@ -450,6 +454,11 @@ int CMS_verify(CMS_ContentInfo *cms, STACK_OF(X509) *certs,
             }
         }
     }
+    /*
+     * at this point, verification_time is supported by a valid time stamp if at least B-T level
+     * was reached.
+     * If higher level long term information was available, it was verified as well.
+     */
 
     /* Attempt to verify all signers certs */
     /* at this point scount == sk_CMS_SignerInfo_num(sinfos) */
