@@ -211,7 +211,6 @@ static int verify_certificatesHashIndex(EVP_MD *md, CMS_ATSHashIndexV3 *hashinde
         goto err;
     }
     for (k = 0; k < numi; k++) {
-fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
         ASN1_OCTET_STRING *digest = sk_ASN1_OCTET_STRING_value(indexs, k);
         CMS_CertificateChoices *cchoice = sk_CMS_CertificateChoices_value(certchoices, numi - 1 - k);
         object = ASN1_item_pack(cchoice, ASN1_ITEM_rptr(CMS_CertificateChoices), &object);
@@ -239,7 +238,6 @@ static int verify_crlsHashIndex(EVP_MD *md, CMS_ATSHashIndexV3 *hashindex, CMS_S
         goto err;
     }
     for (k = 0; k < numi; k++) {
-fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
         ASN1_OCTET_STRING *digest = sk_ASN1_OCTET_STRING_value(indexs, k);
         CMS_RevocationInfoChoice *ri = sk_CMS_RevocationInfoChoice_value(crlchoices, numi - 1 - k);
         object = ASN1_item_pack(ri, ASN1_ITEM_rptr(CMS_RevocationInfoChoice), &object);
@@ -274,7 +272,6 @@ static int verify_unsignedAttrValuesHashIndex(EVP_MD *md, CMS_ATSHashIndexV3 *ha
         goto err;
     }
     for (k = 0; k < num; k++) {
-fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
         ASN1_OCTET_STRING *digest = sk_ASN1_OCTET_STRING_value(indexs, 0);
         X509_ATTRIBUTE *attr = CMS_unsigned_get_attr(si, num - k - 1);
         ASN1_OBJECT *obj = X509_ATTRIBUTE_get0_object(attr);
@@ -285,22 +282,13 @@ fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
             goto err;
         };
         memcpy(content, object->data, object->length);
-#if 0
-{
-int j;
-        for (j=0; j < OBJ_length(obj); j++)
-            fprintf(stderr, "%02X", OBJ_get0_data(obj)[j]);
-        fprintf(stderr, "\n");
-}
-#endif
+
         int count = X509_ATTRIBUTE_count(attr);
-fprintf(stderr, "count=%d\n", count);
         if (count == 0) {
             ERR_raise(ERR_LIB_X509, X509_R_INVALID_ATTRIBUTES);
             goto err;
         }
         for (i = 0; i < count; i++) {
-fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
             ASN1_TYPE *type = X509_ATTRIBUTE_get0_type(attr, i);
             int tag = ASN1_TYPE_get(type);
             ASN1_OCTET_STRING *os = X509_ATTRIBUTE_get0_data(attr, i, tag, NULL);
@@ -309,19 +297,10 @@ fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
                 ERR_raise(ERR_LIB_TS, ERR_R_MALLOC_FAILURE);
                 goto err;
             }
-#if 0
-{
-int j;
-        for (j=0; j < os->length; j++)
-            fprintf(stderr, "%02X", os->data[j]);
-        fprintf(stderr, "\n");
-}
-#endif
             memcpy(newcontent + len, os->data, os->length);
             content = newcontent;
             len += os->length;
         }
-fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
         if (!verify_digest(md, digest, content, len)) {
 #if 0
             goto err;
@@ -332,7 +311,6 @@ fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
         OPENSSL_free(content);
         content = NULL;
     }
-fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
     ret = 1;
 err:
     ASN1_STRING_free(object);
