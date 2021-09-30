@@ -496,7 +496,7 @@ int ossl_cms_rsa_sign(CMS_SignerInfo *si, int verify);
 
 /* CAdES routines */
 int ossl_cms_handle_CAdES_SignatureTimestampToken(X509_ATTRIBUTE *tsattr, X509_STORE *store, ASN1_OCTET_STRING *os, time_t *stamp_time);
-int ossl_cms_handle_CAdES_ArchiveTimestampV3Token(X509_ATTRIBUTE *tsattr, X509_STORE *store, CMS_SignedData *signedData);
+int ossl_cms_handle_CAdES_ArchiveTimestampV3Token(X509_ATTRIBUTE *tsattr, X509_STORE *store, CMS_SignedData *signedData, CMS_SignerInfo *orig_si, BIO* cmsbio);
 
 DECLARE_ASN1_ITEM(CMS_CertificateChoices)
 DECLARE_ASN1_ITEM(CMS_DigestedData)

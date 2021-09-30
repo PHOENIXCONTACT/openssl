@@ -38,10 +38,10 @@ static int ossl_cms_cades_extract_timestamp(PKCS7 *token, time_t *stamp_time) {
     return ret;
 }
 
-static EVP_MD *ossl_cms_cades_get_md(PKCS7 *token) {
+static EVP_MD *ossl_cms_cades_get_md(PKCS7 *token, X509_ALGOR **md_alg) {
     TS_TST_INFO *tst_info;
     TS_MSG_IMPRINT *msg_imprint;
-    X509_ALGOR *md_alg;
+    X509_ALGOR *alg;
     EVP_MD *md = NULL;
     char name[OSSL_MAX_NAME_SIZE];
 
@@ -55,17 +55,18 @@ static EVP_MD *ossl_cms_cades_get_md(PKCS7 *token) {
         fprintf(stderr, "failed to extract msg_imprint from timestamp_info\n");
         goto err;
     }
-    md_alg = TS_MSG_IMPRINT_get_algo(msg_imprint);
-    if (md_alg == NULL) {
+    alg = TS_MSG_IMPRINT_get_algo(msg_imprint);
+    if (alg == NULL) {
         fprintf(stderr, "failed to extract MD algorithm from msg_imprint\n");
         goto err;
     }
 
-    OBJ_obj2txt(name, sizeof(name), md_alg->algorithm, 0);
+    OBJ_obj2txt(name, sizeof(name), alg->algorithm, 0);
     md = EVP_MD_fetch(NULL, name, NULL);
 
     if (md == NULL)
 	md = (EVP_MD *)EVP_get_digestbyname(name);
+    *md_alg = X509_ALGOR_dup(alg); /* alg being freed in TS_TST_INFO_free() */
 err:
     TS_TST_INFO_free(tst_info);
     return md;
@@ -80,6 +81,7 @@ int ossl_cms_handle_CAdES_SignatureTimestampToken(X509_ATTRIBUTE *tsattr, X509_S
     int tag = ASN1_TYPE_get(type);
     ASN1_OCTET_STRING *str = X509_ATTRIBUTE_get0_data(tsattr, 0, tag, NULL);
     PKCS7 *token = ASN1_item_unpack(str, ASN1_ITEM_rptr(PKCS7));
+    X509_ALGOR *md_alg = NULL;
     EVP_MD *md = NULL;
     EVP_MD_CTX *md_ctx = NULL;
     unsigned char *imprint = NULL;
@@ -104,7 +106,7 @@ int ossl_cms_handle_CAdES_SignatureTimestampToken(X509_ATTRIBUTE *tsattr, X509_S
 
     f |= TS_VFY_IMPRINT;
 
-    md = ossl_cms_cades_get_md(token);
+    md = ossl_cms_cades_get_md(token, &md_alg);
     if (md == NULL) {
         fprintf(stderr, "Failed to get message digest for verification\n");
         goto err;
@@ -130,10 +132,7 @@ int ossl_cms_handle_CAdES_SignatureTimestampToken(X509_ATTRIBUTE *tsattr, X509_S
     if (!EVP_DigestFinal(md_ctx, imprint, NULL))
         goto err;
 
-    if (TS_VERIFY_CTX_set_imprint(verify_ctx, imprint, imprint_len) == NULL) {
-        fprintf(stderr, "invalid digest string\n");
-        goto err;
-    }
+    TS_VERIFY_CTX_set_imprint(verify_ctx, imprint, imprint_len);
 
     TS_VERIFY_CTX_add_flags(verify_ctx, f | TS_VFY_SIGNATURE);
 
@@ -154,6 +153,7 @@ err:
         OPENSSL_free(imprint);
     EVP_MD_CTX_free(md_ctx);
     EVP_MD_free(md);
+    X509_ALGOR_free(md_alg);
     M_ASN1_free_of(token, PKCS7);
     return ret;
 }
@@ -340,22 +340,100 @@ err:
     return ret;
 }
 
+static int hash_content(X509_ALGOR *md_alg, unsigned char *digest, unsigned int *mlen, BIO *chain) {
+    int ret = 0;
+    EVP_MD_CTX *md_ctx = EVP_MD_CTX_new();
+    if (md_ctx == NULL) {
+        ERR_raise(ERR_LIB_CMS, ERR_R_MALLOC_FAILURE);
+        goto err;
+    }
+    if (ossl_cms_DigestAlgorithm_find_ctx(md_ctx, chain, md_alg) <= 0) {
+fprintf(stderr, "Failed to find ctx\n");
+        goto err;
+    }
+    if (EVP_DigestFinal_ex(md_ctx, digest, mlen) <= 0) {
+        ERR_raise(ERR_LIB_CMS, CMS_R_UNABLE_TO_FINALIZE_CONTEXT);
+        goto err;
+    }
+    ret = 1;
+err:
+    EVP_MD_CTX_free(md_ctx);
+    return ret;
+}
+
+static int update_with_orig_si(EVP_MD_CTX *md_ctx, CMS_SignerInfo *orig_si) {
+    int i, num, ret = 0;
+    ASN1_OCTET_STRING *object = NULL;
+    object = ASN1_item_pack(&(orig_si->version), ASN1_ITEM_rptr(INT32), &object);
+    if (object == NULL) {
+        fprintf(stderr, "Failed to pack CMSVersion\n");
+        goto err;
+    }
+    if (!EVP_DigestUpdate(md_ctx, object->data, object->length))
+        goto err;
+    object = ASN1_item_pack(orig_si->sid, ASN1_ITEM_rptr(CMS_SignerIdentifier), &object);
+    if (object == NULL) {
+        fprintf(stderr, "Failed to pack SignerIdentifier\n");
+        goto err;
+    }
+    if (!EVP_DigestUpdate(md_ctx, object->data, object->length))
+        goto err;
+    object = ASN1_item_pack(orig_si->digestAlgorithm, ASN1_ITEM_rptr(X509_ALGOR), &object);
+    if (object == NULL) {
+        fprintf(stderr, "Failed to pack digestAlgorithm\n");
+        goto err;
+    }
+    if (!EVP_DigestUpdate(md_ctx, object->data, object->length))
+        goto err;
+    num = CMS_signed_get_attr_count(orig_si);
+    for (i = 0; i < num; i++) {
+        X509_ATTRIBUTE *attr = CMS_signed_get_attr(orig_si, i);
+        object = ASN1_item_pack(attr, ASN1_ITEM_rptr(X509_ATTRIBUTE), &object);
+        if (object == NULL) {
+            fprintf(stderr, "Failed to pack signed attribute\n");
+            goto err;
+        }
+        if (!EVP_DigestUpdate(md_ctx, object->data, object->length))
+            goto err;
+    }
+    object = ASN1_item_pack(orig_si->signatureAlgorithm, ASN1_ITEM_rptr(X509_ALGOR), &object);
+    if (object == NULL) {
+        fprintf(stderr, "Failed to pack signatureAlgorithm\n");
+        goto err;
+    }
+    if (!EVP_DigestUpdate(md_ctx, object->data, object->length))
+        goto err;
+    object = ASN1_item_pack(orig_si->signature, ASN1_ITEM_rptr(ASN1_OCTET_STRING), &object);
+    if (object == NULL) {
+        fprintf(stderr, "Failed to pack signature\n");
+        goto err;
+    }
+    if (!EVP_DigestUpdate(md_ctx, object->data, object->length))
+        goto err;
+    ret = 1;
+err:
+    ASN1_STRING_free(object);
+    return ret;
+}
+
 /* The Archive Timestamp Token comes inside a (unsigned) X509 attribute of SignerInfo. */
 /* The token is in PKCS7 format and needs to be converted from its still encoded form */
-int ossl_cms_handle_CAdES_ArchiveTimestampV3Token(X509_ATTRIBUTE *tsattr, X509_STORE *store, CMS_SignedData *signedData) {
+int ossl_cms_handle_CAdES_ArchiveTimestampV3Token(X509_ATTRIBUTE *tsattr, X509_STORE *store, CMS_SignedData *signedData, CMS_SignerInfo *orig_si, BIO *cmsbio) {
     int i, j, num, ret = 0, f = 0;
-    TS_VERIFY_CTX *verify_ctx= NULL;
+    TS_VERIFY_CTX *verify_ctx = NULL;
     ASN1_TYPE *type = X509_ATTRIBUTE_get0_type(tsattr, 0);
     int tag = ASN1_TYPE_get(type);
     ASN1_OCTET_STRING *str = X509_ATTRIBUTE_get0_data(tsattr, 0, tag, NULL);
+    ASN1_OCTET_STRING *object = NULL;
     PKCS7 *token = ASN1_item_unpack(str, ASN1_ITEM_rptr(PKCS7));
+    X509_ALGOR *md_alg = NULL;
     EVP_MD *md = NULL;
     EVP_MD_CTX *md_ctx = NULL;
     CMS_ContentInfo *internal_cms = ASN1_item_unpack(str, ASN1_ITEM_rptr(CMS_ContentInfo));
     CMS_SignerInfo *si;
     STACK_OF(CMS_SignerInfo) *sinfos;
     ASN1_OBJECT *eContentType = signedData->encapContentInfo->eContentType;
-    CMS_ATSHashIndexV3 *hashindex;
+    CMS_ATSHashIndexV3 *hashindex = NULL;
     unsigned char *imprint;
     unsigned int imprint_len = 0;
 
@@ -394,7 +472,7 @@ int ossl_cms_handle_CAdES_ArchiveTimestampV3Token(X509_ATTRIBUTE *tsattr, X509_S
         goto err;
 
     f |= TS_VFY_IMPRINT;
-    md = ossl_cms_cades_get_md(token);
+    md = ossl_cms_cades_get_md(token, &md_alg);
     if (md == NULL) {
         fprintf(stderr, "Failed to get message digest for verification\n");
         goto err;
@@ -431,7 +509,7 @@ int ossl_cms_handle_CAdES_ArchiveTimestampV3Token(X509_ATTRIBUTE *tsattr, X509_S
      *       external trusted source.
      * 3) The fields version, sid, digestAlgorithm, signedAttrs, signatureAlgorithm, and signature with
      *    in the SignedData.signerInfos's item corresponding to the signature being archive
-     * time-stamped, in their order of appearance.
+     *    time-stamped, in their order of appearance.
      * 4) A single instance of ATSHashIndexV3 type (as defined in clause 5.5.2) contained in the
      *    ats-hashindex-v3 attribute.
      */
@@ -441,6 +519,36 @@ int ossl_cms_handle_CAdES_ArchiveTimestampV3Token(X509_ATTRIBUTE *tsattr, X509_S
      */
     if (!EVP_DigestUpdate(md_ctx, OBJ_get0_data(eContentType), OBJ_length(eContentType)))
         goto err;
+
+    /*
+     * 2) The octets representing the hash of the signed data
+     */
+    ASN1_OCTET_STRING *eContent = signedData->encapContentInfo->eContent;
+    if (eContent != NULL) {
+fprintf(stderr, "Embedded content found, would need to calculate hash. Legnth=%d\n", eContent->length);
+    } else {
+fprintf(stderr, "No embedded content found, external hashing needed\n");
+        unsigned int mlen;
+        unsigned char digest[EVP_MAX_MD_SIZE];
+        if (!hash_content(md_alg, digest, &mlen, cmsbio))
+            goto err;
+        if (mlen != imprint_len) {
+            fprintf(stderr, "Digest length mismatch: mlen=%d != imprint_len=%d\n", mlen, imprint_len);
+            goto err;
+        }
+        if (!EVP_DigestUpdate(md_ctx, digest, mlen))
+            goto err;
+    }
+
+    /*
+     * 3) The fields version, sid, digestAlgorithm, signedAttrs, signatureAlgorithm, and signature with
+     *    in the SignedData.signerInfos's item corresponding to the signature being archive
+     *    time-stamped, in their order of appearance.
+     */
+    if (!update_with_orig_si(md_ctx, orig_si)) {
+        fprintf(stderr, "Failed to process original signature\n");
+        goto err;
+    }
 
     for (i = 0; i < sk_CMS_SignerInfo_num(sinfos); i++) {
         si = sk_CMS_SignerInfo_value(sinfos, i);
@@ -454,9 +562,17 @@ int ossl_cms_handle_CAdES_ArchiveTimestampV3Token(X509_ATTRIBUTE *tsattr, X509_S
             switch (OBJ_obj2nid(obj)) {
                 case (NID_id_aa_ATSHashIndex_v3):
                     fprintf(stderr, "    ATSHashIndex-v3 found \n");
+
                     ASN1_TYPE *hi_type = X509_ATTRIBUTE_get0_type(attr, 0);
                     int hi_tag = ASN1_TYPE_get(hi_type);
                     ASN1_OCTET_STRING *hi_str = X509_ATTRIBUTE_get0_data(attr, 0, hi_tag, NULL);
+    /*
+     * 4) A single instance of ATSHashIndexV3 type (as defined in clause 5.5.2) contained in the
+     *    ats-hashindex-v3 attribute.
+     */
+                    if (!EVP_DigestUpdate(md_ctx, hi_str->data, hi_str->length))
+                        goto err;
+
 		    hashindex = ASN1_item_unpack(hi_str, ASN1_ITEM_rptr(CMS_ATSHashIndexV3));
                     if (hashindex == NULL) {
                         fprintf(stderr, "    Failed to unpack ATSHashIndex-v3\n");
@@ -473,7 +589,6 @@ int ossl_cms_handle_CAdES_ArchiveTimestampV3Token(X509_ATTRIBUTE *tsattr, X509_S
                     if (!verify_unsignedAttrValuesHashIndex(md, hashindex, signedData))
                         goto err;
 
-                    M_ASN1_free_of(hashindex, CMS_ATSHashIndexV3);
                     break;
                 default:
                     ; /* don't care */
@@ -484,10 +599,7 @@ int ossl_cms_handle_CAdES_ArchiveTimestampV3Token(X509_ATTRIBUTE *tsattr, X509_S
     if (!EVP_DigestFinal(md_ctx, imprint, NULL))
         goto err;
 
-    if (TS_VERIFY_CTX_set_imprint(verify_ctx, imprint, imprint_len) == NULL) {
-        fprintf(stderr, "invalid digest string\n");
-        goto err;
-    }
+    TS_VERIFY_CTX_set_imprint(verify_ctx, imprint, imprint_len);
 
     TS_VERIFY_CTX_add_flags(verify_ctx, f | TS_VFY_SIGNATURE);
 
@@ -499,19 +611,23 @@ int ossl_cms_handle_CAdES_ArchiveTimestampV3Token(X509_ATTRIBUTE *tsattr, X509_S
     };
 
     ret = TS_RESP_verify_token(verify_ctx, token);
-    if (!ret)
-	ERR_print_errors_fp(stderr);
-
-    ret = 1;
-    fprintf(stderr, "In ArchiveTimetampToken: faked result\n");
 
 err:
+    if (!ret)
+	ERR_print_errors_fp(stderr);
     TS_VERIFY_CTX_free(verify_ctx);
     if (!verify_ctx)	/* TS_VERIFY_CTX_free() frees the imprint... */
         OPENSSL_free(imprint);
     M_ASN1_free_of(internal_cms, CMS_ContentInfo);
+    ASN1_STRING_free(object);
     EVP_MD_CTX_free(md_ctx);
     EVP_MD_free(md);
+    X509_ALGOR_free(md_alg);
+    M_ASN1_free_of(hashindex, CMS_ATSHashIndexV3);
     M_ASN1_free_of(token, PKCS7);
+
+    ret = 1;
+    fprintf(stderr, "In ArchiveTimetampToken: faked result\n");
+
     return ret;
 }
