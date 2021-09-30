@@ -319,7 +319,7 @@ err:
     return ret;
 }
 
-static int hash_content(X509_ALGOR *md_alg, unsigned char *digest, unsigned int *mlen, BIO *chain) {
+static int hash_external_content(X509_ALGOR *md_alg, unsigned char *digest, unsigned int *mlen, BIO *chain) {
     int ret = 0;
     EVP_MD_CTX *md_ctx = EVP_MD_CTX_new();
     if (md_ctx == NULL) {
@@ -334,6 +334,15 @@ fprintf(stderr, "Failed to find ctx\n");
         ERR_raise(ERR_LIB_CMS, CMS_R_UNABLE_TO_FINALIZE_CONTEXT);
         goto err;
     }
+#if 0
+{
+        int i;
+        fprintf(stderr, "eContent digest: ");
+        for (i=0; i < *mlen; i++)
+            fprintf(stderr, "%02X", digest[i]);
+        fprintf(stderr, "\n");
+}
+#endif
     ret = 1;
 err:
     EVP_MD_CTX_free(md_ctx);
@@ -489,11 +498,12 @@ int ossl_cms_handle_CAdES_ArchiveTimestampV3Token(X509_ATTRIBUTE *tsattr, X509_S
     ASN1_OCTET_STRING *eContent = signedData->encapContentInfo->eContent;
     if (eContent != NULL) {
 fprintf(stderr, "Embedded content found, would need to calculate hash. Legnth=%d\n", eContent->length);
+        goto err;
     } else {
 fprintf(stderr, "No embedded content found, external hashing needed\n");
         unsigned int mlen;
         unsigned char digest[EVP_MAX_MD_SIZE];
-        if (!hash_content(md_alg, digest, &mlen, cmsbio))
+        if (!hash_external_content(md_alg, digest, &mlen, cmsbio))
             goto err;
         if (mlen != imprint_len) {
             fprintf(stderr, "Digest length mismatch: mlen=%d != imprint_len=%d\n", mlen, imprint_len);
