@@ -163,7 +163,6 @@ static int verify_digest(EVP_MD *md, ASN1_OCTET_STRING *digest, unsigned char *d
     unsigned char imprint[EVP_MAX_MD_SIZE];
     int ret = 0;
 
-fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
     if (EVP_MD_get_size(md) != digest->length) {
         fprintf(stderr, "Invalid digest size\n");
         goto err;
@@ -184,6 +183,7 @@ fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
         goto err;
 
     if (memcmp(imprint, digest->data, digest->length)) {
+#if 0
         fprintf(stderr, "Digest incorrect\n");
         int i;
         for (i=0; i < digest->length; i++)
@@ -192,6 +192,7 @@ fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
         for (i=0; i < digest->length; i++)
             fprintf(stderr, "%02X", digest->data[i]);
         fprintf(stderr, "\n");
+#endif
         ERR_raise(ERR_LIB_CMS, CMS_R_VERIFICATION_FAILURE);
     } else
         ret = 1;
@@ -339,54 +340,38 @@ err:
     return ret;
 }
 
+static int update_hash(EVP_MD_CTX *md_ctx, void *item, const ASN1_ITEM *it, ASN1_OCTET_STRING **object) {
+    int ret = 0;
+    *object = ASN1_item_pack(item, it, object);
+    if (*object == NULL) {
+        fprintf(stderr, "Failed to pack\n");
+        goto err;
+    }
+    if (!EVP_DigestUpdate(md_ctx, (*object)->data, (*object)->length))
+        goto err;
+    ret = 1;
+err:
+    return ret;
+}
+
 static int update_with_orig_si(EVP_MD_CTX *md_ctx, CMS_SignerInfo *orig_si) {
     int i, num, ret = 0;
     ASN1_OCTET_STRING *object = NULL;
-    object = ASN1_item_pack(&(orig_si->version), ASN1_ITEM_rptr(INT32), &object);
-    if (object == NULL) {
-        fprintf(stderr, "Failed to pack CMSVersion\n");
+    if (!update_hash(md_ctx, &(orig_si->version), ASN1_ITEM_rptr(INT32), &object))
         goto err;
-    }
-    if (!EVP_DigestUpdate(md_ctx, object->data, object->length))
+    if (!update_hash(md_ctx, orig_si->sid, ASN1_ITEM_rptr(CMS_SignerIdentifier), &object))
         goto err;
-    object = ASN1_item_pack(orig_si->sid, ASN1_ITEM_rptr(CMS_SignerIdentifier), &object);
-    if (object == NULL) {
-        fprintf(stderr, "Failed to pack SignerIdentifier\n");
-        goto err;
-    }
-    if (!EVP_DigestUpdate(md_ctx, object->data, object->length))
-        goto err;
-    object = ASN1_item_pack(orig_si->digestAlgorithm, ASN1_ITEM_rptr(X509_ALGOR), &object);
-    if (object == NULL) {
-        fprintf(stderr, "Failed to pack digestAlgorithm\n");
-        goto err;
-    }
-    if (!EVP_DigestUpdate(md_ctx, object->data, object->length))
+    if (!update_hash(md_ctx, orig_si->digestAlgorithm, ASN1_ITEM_rptr(X509_ALGOR), &object))
         goto err;
     num = CMS_signed_get_attr_count(orig_si);
     for (i = 0; i < num; i++) {
         X509_ATTRIBUTE *attr = CMS_signed_get_attr(orig_si, i);
-        object = ASN1_item_pack(attr, ASN1_ITEM_rptr(X509_ATTRIBUTE), &object);
-        if (object == NULL) {
-            fprintf(stderr, "Failed to pack signed attribute\n");
-            goto err;
-        }
-        if (!EVP_DigestUpdate(md_ctx, object->data, object->length))
+        if (!update_hash(md_ctx, attr, ASN1_ITEM_rptr(X509_ATTRIBUTE), &object))
             goto err;
     }
-    object = ASN1_item_pack(orig_si->signatureAlgorithm, ASN1_ITEM_rptr(X509_ALGOR), &object);
-    if (object == NULL) {
-        fprintf(stderr, "Failed to pack signatureAlgorithm\n");
+    if (!update_hash(md_ctx, orig_si->signatureAlgorithm, ASN1_ITEM_rptr(X509_ALGOR), &object))
         goto err;
-    }
-    if (!EVP_DigestUpdate(md_ctx, object->data, object->length))
-        goto err;
-    object = ASN1_item_pack(orig_si->signature, ASN1_ITEM_rptr(ASN1_OCTET_STRING), &object);
-    if (object == NULL) {
-        fprintf(stderr, "Failed to pack signature\n");
-        goto err;
-    }
-    if (!EVP_DigestUpdate(md_ctx, object->data, object->length))
+    if (!update_hash(md_ctx, orig_si->signature, ASN1_ITEM_rptr(ASN1_OCTET_STRING), &object))
         goto err;
     ret = 1;
 err:
