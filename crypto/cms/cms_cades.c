@@ -354,24 +354,24 @@ err:
     return ret;
 }
 
-static int update_with_orig_si(EVP_MD_CTX *md_ctx, CMS_SignerInfo *orig_si) {
+static int update_with_root_si_properties(EVP_MD_CTX *md_ctx, CMS_SignerInfo *root_si) {
     int i, num, ret = 0;
     ASN1_OCTET_STRING *object = NULL;
-    if (!update_hash(md_ctx, &(orig_si->version), ASN1_ITEM_rptr(INT32), &object))
+    if (!update_hash(md_ctx, &(root_si->version), ASN1_ITEM_rptr(INT32), &object))
         goto err;
-    if (!update_hash(md_ctx, orig_si->sid, ASN1_ITEM_rptr(CMS_SignerIdentifier), &object))
+    if (!update_hash(md_ctx, root_si->sid, ASN1_ITEM_rptr(CMS_SignerIdentifier), &object))
         goto err;
-    if (!update_hash(md_ctx, orig_si->digestAlgorithm, ASN1_ITEM_rptr(X509_ALGOR), &object))
+    if (!update_hash(md_ctx, root_si->digestAlgorithm, ASN1_ITEM_rptr(X509_ALGOR), &object))
         goto err;
-    num = CMS_signed_get_attr_count(orig_si);
+    num = CMS_signed_get_attr_count(root_si);
     for (i = 0; i < num; i++) {
-        X509_ATTRIBUTE *attr = CMS_signed_get_attr(orig_si, i);
+        X509_ATTRIBUTE *attr = CMS_signed_get_attr(root_si, i);
         if (!update_hash(md_ctx, attr, ASN1_ITEM_rptr(X509_ATTRIBUTE), &object))
             goto err;
     }
-    if (!update_hash(md_ctx, orig_si->signatureAlgorithm, ASN1_ITEM_rptr(X509_ALGOR), &object))
+    if (!update_hash(md_ctx, root_si->signatureAlgorithm, ASN1_ITEM_rptr(X509_ALGOR), &object))
         goto err;
-    if (!update_hash(md_ctx, orig_si->signature, ASN1_ITEM_rptr(ASN1_OCTET_STRING), &object))
+    if (!update_hash(md_ctx, root_si->signature, ASN1_ITEM_rptr(ASN1_OCTET_STRING), &object))
         goto err;
     ret = 1;
 err:
@@ -381,7 +381,7 @@ err:
 
 /* The Archive Timestamp Token comes inside a (unsigned) X509 attribute of SignerInfo. */
 /* The token is in PKCS7 format and needs to be converted from its still encoded form */
-int ossl_cms_handle_CAdES_ArchiveTimestampV3Token(X509_ATTRIBUTE *tsattr, X509_STORE *store, CMS_SignedData *signedData, CMS_SignerInfo *orig_si, BIO *cmsbio) {
+int ossl_cms_handle_CAdES_ArchiveTimestampV3Token(X509_ATTRIBUTE *tsattr, X509_STORE *store, CMS_SignedData *signedData, CMS_SignerInfo *root_si, BIO *cmsbio) {
     int i, j, num, ret = 0, f = 0;
     TS_VERIFY_CTX *verify_ctx = NULL;
     ASN1_TYPE *type = X509_ATTRIBUTE_get0_type(tsattr, 0);
@@ -508,7 +508,7 @@ fprintf(stderr, "No embedded content found, external hashing needed\n");
      *    in the SignedData.signerInfos's item corresponding to the signature being archive
      *    time-stamped, in their order of appearance.
      */
-    if (!update_with_orig_si(md_ctx, orig_si)) {
+    if (!update_with_root_si_properties(md_ctx, root_si)) {
         fprintf(stderr, "Failed to process original signature\n");
         goto err;
     }
