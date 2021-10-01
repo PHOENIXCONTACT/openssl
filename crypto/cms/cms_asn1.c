@@ -347,6 +347,15 @@ ASN1_ITEM_TEMPLATE(CMS_Attributes_Verify) =
                                 V_ASN1_SET, CMS_ATTRIBUTES, X509_ATTRIBUTE)
 ASN1_ITEM_TEMPLATE_END(CMS_Attributes_Verify)
 
+/*
+ * In the context of the CAdES-B-LTA verification the IMP_SET_ is translated into cont[0].
+ * I do think the correct handling is different but this setup works for now.
+ */
+ASN1_ITEM_TEMPLATE(CMS_Attributes_CadesLTA) =
+        ASN1_EX_TEMPLATE_TYPE(ASN1_TFLG_SEQUENCE_OF | ASN1_TFLG_IMPTAG | ASN1_TFLG_CONTEXT,
+                                0, CMS_ATTRIBUTES, X509_ATTRIBUTE)
+ASN1_ITEM_TEMPLATE_END(CMS_Attributes_CadesLTA)
+
 
 
 ASN1_CHOICE(CMS_ReceiptsFrom) = {
