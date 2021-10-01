@@ -24,6 +24,65 @@
 
 /* CAdES services */
 
+/* base64 encoder taken from
+ * https://opensource.apple.com/source/QuickTimeStreamingServer/QuickTimeStreamingServer-452/CommonUtilitiesLib/base64.c
+ */
+static const char basis_64[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+int Base64encode_len(int len)
+{
+    return ((len + 2) / 3 * 4) + 1;
+}
+
+static int Base64encode(char *encoded, const unsigned char *string, int len)
+{
+    int i;
+    char *p;
+
+    p = encoded;
+    for (i = 0; i < len - 2; i += 3) {
+    *p++ = basis_64[(string[i] >> 2) & 0x3F];
+    *p++ = basis_64[((string[i] & 0x3) << 4) |
+                    ((int) (string[i + 1] & 0xF0) >> 4)];
+    *p++ = basis_64[((string[i + 1] & 0xF) << 2) |
+                    ((int) (string[i + 2] & 0xC0) >> 6)];
+    *p++ = basis_64[string[i + 2] & 0x3F];
+    }
+    if (i < len) {
+    *p++ = basis_64[(string[i] >> 2) & 0x3F];
+    if (i == (len - 1)) {
+        *p++ = basis_64[((string[i] & 0x3) << 4)];
+        *p++ = '=';
+    }
+    else {
+        *p++ = basis_64[((string[i] & 0x3) << 4) |
+                        ((int) (string[i + 1] & 0xF0) >> 4)];
+        *p++ = basis_64[((string[i + 1] & 0xF) << 2)];
+    }
+    *p++ = '=';
+    }
+
+    *p++ = '\0';
+    return p - encoded;
+}
+
+static void printhex(const char *desc, const unsigned char *content, unsigned len) {
+    int i;
+    char *encoded;
+    fprintf(stderr, "%s:\n    ", desc);
+    for (i=0; i < len; i++)
+        fprintf(stderr, "%02X", content[i]);
+    fprintf(stderr, "\n");
+    encoded = OPENSSL_malloc(Base64encode_len(len));
+    if (!encoded)
+        goto err;
+    Base64encode(encoded, content, len);
+    fprintf(stderr, "    %s\n", encoded);
+err:
+   OPENSSL_free(encoded);
+}
+
 /* extract the time of stamping from the timestamp token */
 static int ossl_cms_cades_extract_timestamp(PKCS7 *token, time_t *stamp_time) {
     int ret = 0;
@@ -334,28 +393,21 @@ fprintf(stderr, "Failed to find ctx\n");
         ERR_raise(ERR_LIB_CMS, CMS_R_UNABLE_TO_FINALIZE_CONTEXT);
         goto err;
     }
-#if 0
-{
-        int i;
-        fprintf(stderr, "eContent digest: ");
-        for (i=0; i < *mlen; i++)
-            fprintf(stderr, "%02X", digest[i]);
-        fprintf(stderr, "\n");
-}
-#endif
+    printhex("eContent", digest, *mlen);
     ret = 1;
 err:
     EVP_MD_CTX_free(md_ctx);
     return ret;
 }
 
-static int update_hash(EVP_MD_CTX *md_ctx, void *item, const ASN1_ITEM *it, ASN1_OCTET_STRING **object) {
+static int update_hash(EVP_MD_CTX *md_ctx, void *item, const ASN1_ITEM *it, ASN1_OCTET_STRING **object, const char *desc) {
     int ret = 0;
     *object = ASN1_item_pack(item, it, object);
     if (*object == NULL) {
         fprintf(stderr, "Failed to pack\n");
         goto err;
     }
+    printhex(desc, (*object)->data, (*object)->length);
     if (!EVP_DigestUpdate(md_ctx, (*object)->data, (*object)->length))
         goto err;
     ret = 1;
@@ -366,21 +418,21 @@ err:
 static int update_with_root_si_properties(EVP_MD_CTX *md_ctx, CMS_SignerInfo *root_si) {
     int i, num, ret = 0;
     ASN1_OCTET_STRING *object = NULL;
-    if (!update_hash(md_ctx, &(root_si->version), ASN1_ITEM_rptr(INT32), &object))
+    if (!update_hash(md_ctx, &(root_si->version), ASN1_ITEM_rptr(INT32), &object, "Version"))
         goto err;
-    if (!update_hash(md_ctx, root_si->sid, ASN1_ITEM_rptr(CMS_SignerIdentifier), &object))
+    if (!update_hash(md_ctx, root_si->sid, ASN1_ITEM_rptr(CMS_SignerIdentifier), &object, "SignerId"))
         goto err;
-    if (!update_hash(md_ctx, root_si->digestAlgorithm, ASN1_ITEM_rptr(X509_ALGOR), &object))
+    if (!update_hash(md_ctx, root_si->digestAlgorithm, ASN1_ITEM_rptr(X509_ALGOR), &object, "digestAlgorithm"))
         goto err;
     num = CMS_signed_get_attr_count(root_si);
     for (i = 0; i < num; i++) {
         X509_ATTRIBUTE *attr = CMS_signed_get_attr(root_si, i);
-        if (!update_hash(md_ctx, attr, ASN1_ITEM_rptr(X509_ATTRIBUTE), &object))
+        if (!update_hash(md_ctx, attr, ASN1_ITEM_rptr(X509_ATTRIBUTE), &object, "  SignedAttribute"))
             goto err;
     }
-    if (!update_hash(md_ctx, root_si->signatureAlgorithm, ASN1_ITEM_rptr(X509_ALGOR), &object))
+    if (!update_hash(md_ctx, root_si->signatureAlgorithm, ASN1_ITEM_rptr(X509_ALGOR), &object, "signatureAlgorithm"))
         goto err;
-    if (!update_hash(md_ctx, root_si->signature, ASN1_ITEM_rptr(ASN1_OCTET_STRING), &object))
+    if (!update_hash(md_ctx, root_si->signature, ASN1_ITEM_rptr(ASN1_OCTET_STRING), &object, "signature"))
         goto err;
     ret = 1;
 err:
@@ -489,8 +541,11 @@ int ossl_cms_handle_CAdES_ArchiveTimestampV3Token(X509_ATTRIBUTE *tsattr, X509_S
     /*
      * 1) The SignedData.encapContentInfo.eContentType.
      */
-    if (!EVP_DigestUpdate(md_ctx, OBJ_get0_data(eContentType), OBJ_length(eContentType)))
+    object = ASN1_item_pack(eContentType, ASN1_ITEM_rptr(ASN1_OBJECT), &object);
+
+    if (!EVP_DigestUpdate(md_ctx, object->data, object->length))
         goto err;
+    printhex("eContentType", object->data, object->length);
 
     /*
      * 2) The octets representing the hash of the signed data
