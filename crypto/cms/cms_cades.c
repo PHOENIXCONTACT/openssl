@@ -24,6 +24,7 @@
 
 /* CAdES services */
 
+#if 1
 /* base64 encoder taken from
  * https://opensource.apple.com/source/QuickTimeStreamingServer/QuickTimeStreamingServer-452/CommonUtilitiesLib/base64.c
  */
@@ -82,6 +83,10 @@ static void printhex(const char *desc, const unsigned char *content, unsigned le
 err:
    OPENSSL_free(encoded);
 }
+
+#else
+static void printhex(const char *desc, const unsigned char *content, unsigned len) {;}
+#endif
 
 /* extract the time of stamping from the timestamp token */
 static int ossl_cms_cades_extract_timestamp(PKCS7 *token, time_t *stamp_time) {
@@ -416,7 +421,7 @@ err:
 }
 
 static int update_with_root_si_properties(EVP_MD_CTX *md_ctx, CMS_SignerInfo *root_si) {
-    int i, num, ret = 0;
+    int ret = 0;
     ASN1_OCTET_STRING *object = NULL;
     if (!update_hash(md_ctx, &(root_si->version), ASN1_ITEM_rptr(INT32), &object, "Version"))
         goto err;
@@ -424,12 +429,8 @@ static int update_with_root_si_properties(EVP_MD_CTX *md_ctx, CMS_SignerInfo *ro
         goto err;
     if (!update_hash(md_ctx, root_si->digestAlgorithm, ASN1_ITEM_rptr(X509_ALGOR), &object, "digestAlgorithm"))
         goto err;
-    num = CMS_signed_get_attr_count(root_si);
-    for (i = 0; i < num; i++) {
-        X509_ATTRIBUTE *attr = CMS_signed_get_attr(root_si, i);
-        if (!update_hash(md_ctx, attr, ASN1_ITEM_rptr(X509_ATTRIBUTE), &object, "  SignedAttribute"))
-            goto err;
-    }
+    if (!update_hash(md_ctx, root_si->signedAttrs, ASN1_ITEM_rptr(CMS_Attributes_CadesLTA), &object, "SignedAttributes"))
+        goto err;
     if (!update_hash(md_ctx, root_si->signatureAlgorithm, ASN1_ITEM_rptr(X509_ALGOR), &object, "signatureAlgorithm"))
         goto err;
     if (!update_hash(md_ctx, root_si->signature, ASN1_ITEM_rptr(ASN1_OCTET_STRING), &object, "signature"))
@@ -653,9 +654,6 @@ err:
     X509_ALGOR_free(md_alg);
     M_ASN1_free_of(hashindex, CMS_ATSHashIndexV3);
     M_ASN1_free_of(token, PKCS7);
-
-    ret = 1;
-    fprintf(stderr, "In ArchiveTimetampToken: faked result\n");
 
     return ret;
 }
