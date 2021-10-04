@@ -88,10 +88,33 @@ err:
 static void printhex(const char *desc, const unsigned char *content, unsigned len) {;}
 #endif
 
+/* Getting encapsulated TS_TST_INFO object from CMS. */
+TS_TST_INFO *CMS_to_TS_TST_INFO(CMS_ContentInfo *cmstoken)
+{
+    ASN1_OCTET_STRING *tst_info_der;
+    const unsigned char *p;
+
+    if (OBJ_obj2nid(cmstoken->contentType) != NID_pkcs7_signed) {
+        ERR_raise(ERR_LIB_TS, TS_R_BAD_PKCS7_TYPE);
+        return NULL;
+    }
+    if (CMS_is_detached(cmstoken)) {
+        ERR_raise(ERR_LIB_TS, TS_R_DETACHED_CONTENT);
+        return NULL;
+    }
+    if (OBJ_obj2nid(CMS_get0_eContentType(cmstoken)) != NID_id_smime_ct_TSTInfo) {
+        ERR_raise(ERR_LIB_TS, TS_R_BAD_PKCS7_TYPE);
+        return NULL;
+    }
+    tst_info_der = *CMS_get0_content(cmstoken);
+    p = tst_info_der->data;
+    return d2i_TS_TST_INFO(NULL, &p, tst_info_der->length);
+}
+
 /* extract the time of stamping from the timestamp token */
-static int ossl_cms_cades_extract_timestamp(PKCS7 *token, time_t *stamp_time) {
+static int ossl_cms_cades_extract_timestamp(CMS_ContentInfo *cmstoken, time_t *stamp_time) {
     int ret = 0;
-    TS_TST_INFO *tst_info = PKCS7_to_TS_TST_INFO(token);
+    TS_TST_INFO *tst_info = CMS_to_TS_TST_INFO(cmstoken);
     const ASN1_GENERALIZEDTIME *atime = TS_TST_INFO_get_time(tst_info);
     struct tm tm;
     if (ASN1_TIME_to_tm(atime, &tm)) {
@@ -102,14 +125,14 @@ static int ossl_cms_cades_extract_timestamp(PKCS7 *token, time_t *stamp_time) {
     return ret;
 }
 
-static EVP_MD *ossl_cms_cades_get_md(PKCS7 *token, X509_ALGOR **md_alg) {
+static EVP_MD *ossl_cms_cades_get_md(CMS_ContentInfo *cmstoken, X509_ALGOR **md_alg) {
     TS_TST_INFO *tst_info;
     TS_MSG_IMPRINT *msg_imprint;
     X509_ALGOR *alg;
     EVP_MD *md = NULL;
     char name[OSSL_MAX_NAME_SIZE];
 
-    tst_info = PKCS7_to_TS_TST_INFO(token);
+    tst_info = CMS_to_TS_TST_INFO(cmstoken);
     if (tst_info == NULL) {
         fprintf(stderr, "failed to extract timestamp_info from timestamp\n");
         goto err;
@@ -145,6 +168,7 @@ int ossl_cms_handle_CAdES_SignatureTimestampToken(X509_ATTRIBUTE *tsattr, X509_S
     int tag = ASN1_TYPE_get(type);
     ASN1_OCTET_STRING *str = X509_ATTRIBUTE_get0_data(tsattr, 0, tag, NULL);
     PKCS7 *token = ASN1_item_unpack(str, ASN1_ITEM_rptr(PKCS7));
+    CMS_ContentInfo *cmstoken = ASN1_item_unpack(str, ASN1_ITEM_rptr(CMS_ContentInfo));
     X509_ALGOR *md_alg = NULL;
     EVP_MD *md = NULL;
     EVP_MD_CTX *md_ctx = NULL;
@@ -163,14 +187,14 @@ int ossl_cms_handle_CAdES_SignatureTimestampToken(X509_ATTRIBUTE *tsattr, X509_S
     if (verify_ctx == NULL)
         goto err;
 
-    if (!ossl_cms_cades_extract_timestamp(token, stamp_time)) {
+    if (!ossl_cms_cades_extract_timestamp(cmstoken, stamp_time)) {
         fprintf(stderr, "failed to extact stamping time\n");
         goto err;
     }
 
     f |= TS_VFY_IMPRINT;
 
-    md = ossl_cms_cades_get_md(token, &md_alg);
+    md = ossl_cms_cades_get_md(cmstoken, &md_alg);
     if (md == NULL) {
         fprintf(stderr, "Failed to get message digest for verification\n");
         goto err;
@@ -218,6 +242,7 @@ err:
     EVP_MD_CTX_free(md_ctx);
     EVP_MD_free(md);
     X509_ALGOR_free(md_alg);
+    M_ASN1_free_of(cmstoken, CMS_ContentInfo);
     M_ASN1_free_of(token, PKCS7);
     return ret;
 }
@@ -497,7 +522,7 @@ int ossl_cms_handle_CAdES_ArchiveTimestampV3Token(X509_ATTRIBUTE *tsattr, X509_S
         goto err;
 
     f |= TS_VFY_IMPRINT;
-    md = ossl_cms_cades_get_md(token, &md_alg);
+    md = ossl_cms_cades_get_md(internal_cms, &md_alg);
     if (md == NULL) {
         fprintf(stderr, "Failed to get message digest for verification\n");
         goto err;
