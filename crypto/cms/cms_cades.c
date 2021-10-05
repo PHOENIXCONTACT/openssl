@@ -222,6 +222,7 @@ fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
         goto err;
 
     TS_VERIFY_CTX_set_imprint(verify_ctx, imprint, imprint_len);
+    imprint = NULL;	/* freed by TS_VERIFY_CTX_free() */
 
     TS_VERIFY_CTX_add_flags(verify_ctx, f | TS_VFY_SIGNATURE);
 
@@ -233,17 +234,16 @@ fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
     };
 
     ret = cms_TS_RESP_verify_token(verify_ctx, cmstoken);
-    if (!ret)
-	ERR_print_errors_fp(stderr);
 
 err:
+    if (!ret)
+	ERR_print_errors_fp(stderr);
     TS_VERIFY_CTX_free(verify_ctx);
-    if (!verify_ctx)	/* TS_VERIFY_CTX_free() frees the imprint... */
-        OPENSSL_free(imprint);
+    OPENSSL_free(imprint);
+    M_ASN1_free_of(cmstoken, CMS_ContentInfo);
     EVP_MD_CTX_free(md_ctx);
     EVP_MD_free(md);
     X509_ALGOR_free(md_alg);
-    M_ASN1_free_of(cmstoken, CMS_ContentInfo);
     return ret;
 }
 
@@ -653,6 +653,7 @@ fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
         goto err;
 
     TS_VERIFY_CTX_set_imprint(verify_ctx, imprint, imprint_len);
+    imprint = NULL;     /* freed by TS_VERIFY_CTX_free() */
 
     TS_VERIFY_CTX_add_flags(verify_ctx, f | TS_VFY_SIGNATURE);
 
@@ -674,8 +675,7 @@ fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
     if (!ret)
 	ERR_print_errors_fp(stderr);
     TS_VERIFY_CTX_free(verify_ctx);
-    if (!verify_ctx)	/* TS_VERIFY_CTX_free() frees the imprint... */
-        OPENSSL_free(imprint);
+    OPENSSL_free(imprint);
     M_ASN1_free_of(internal_cms, CMS_ContentInfo);
     ASN1_STRING_free(object);
     EVP_MD_CTX_free(md_ctx);

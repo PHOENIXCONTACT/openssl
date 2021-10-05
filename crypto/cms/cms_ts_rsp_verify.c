@@ -151,10 +151,9 @@ fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
  err:
     BIO_free_all(cmsbio);
     sk_X509_free(untrusted);
-    sk_X509_free(cms_certs);
+    sk_X509_pop_free(cms_certs, X509_free);
     sk_X509_pop_free(chain, X509_free);
     sk_X509_free(signers);
-    X509_free(signer);
 
     return ret;
 }
@@ -249,6 +248,7 @@ fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
     if ((flags & TS_VFY_SIGNATURE)
         && !cms_TS_RESP_verify_signature(cmstoken, ctx->certs, ctx->store, &signer))
         goto err;
+
 fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
     if ((flags & TS_VFY_VERSION)
         && TS_TST_INFO_get_version(tst_info) != 1) {
