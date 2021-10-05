@@ -21,6 +21,7 @@
 #include "crypto/evp.h"
 #include "crypto/x509.h"
 #include "cms_local.h"
+#include "cms_ts_local.h"
 
 /* CAdES services */
 
@@ -111,6 +112,7 @@ TS_TST_INFO *CMS_to_TS_TST_INFO(CMS_ContentInfo *cmstoken)
     return d2i_TS_TST_INFO(NULL, &p, tst_info_der->length);
 }
 
+
 /* extract the time of stamping from the timestamp token */
 static int ossl_cms_cades_extract_timestamp(CMS_ContentInfo *cmstoken, time_t *stamp_time) {
     int ret = 0;
@@ -167,15 +169,14 @@ int ossl_cms_handle_CAdES_SignatureTimestampToken(X509_ATTRIBUTE *tsattr, X509_S
     ASN1_TYPE *type = X509_ATTRIBUTE_get0_type(tsattr, 0);
     int tag = ASN1_TYPE_get(type);
     ASN1_OCTET_STRING *str = X509_ATTRIBUTE_get0_data(tsattr, 0, tag, NULL);
-    PKCS7 *token = ASN1_item_unpack(str, ASN1_ITEM_rptr(PKCS7));
     CMS_ContentInfo *cmstoken = ASN1_item_unpack(str, ASN1_ITEM_rptr(CMS_ContentInfo));
     X509_ALGOR *md_alg = NULL;
     EVP_MD *md = NULL;
     EVP_MD_CTX *md_ctx = NULL;
     unsigned char *imprint = NULL;
     unsigned int imprint_len;
-
-    if (!token) {
+fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
+    if (!cmstoken) {
         fprintf(stderr, "Could not extract token\n");
 	ERR_print_errors_fp(stderr);
 	goto err;
@@ -231,7 +232,7 @@ int ossl_cms_handle_CAdES_SignatureTimestampToken(X509_ATTRIBUTE *tsattr, X509_S
 	goto err;
     };
 
-    ret = TS_RESP_verify_token(verify_ctx, token);
+    ret = cms_TS_RESP_verify_token(verify_ctx, cmstoken);
     if (!ret)
 	ERR_print_errors_fp(stderr);
 
@@ -243,7 +244,6 @@ err:
     EVP_MD_free(md);
     X509_ALGOR_free(md_alg);
     M_ASN1_free_of(cmstoken, CMS_ContentInfo);
-    M_ASN1_free_of(token, PKCS7);
     return ret;
 }
 
@@ -272,7 +272,7 @@ static int verify_digest(EVP_MD *md, ASN1_OCTET_STRING *digest, unsigned char *d
         goto err;
 
     if (memcmp(imprint, digest->data, digest->length)) {
-#if 0
+#if 1
         fprintf(stderr, "Digest incorrect\n");
         int i;
         for (i=0; i < digest->length; i++)
@@ -475,7 +475,6 @@ int ossl_cms_handle_CAdES_ArchiveTimestampV3Token(X509_ATTRIBUTE *tsattr, X509_S
     int tag = ASN1_TYPE_get(type);
     ASN1_OCTET_STRING *str = X509_ATTRIBUTE_get0_data(tsattr, 0, tag, NULL);
     ASN1_OCTET_STRING *object = NULL;
-    PKCS7 *token = ASN1_item_unpack(str, ASN1_ITEM_rptr(PKCS7));
     X509_ALGOR *md_alg = NULL;
     EVP_MD *md = NULL;
     EVP_MD_CTX *md_ctx = NULL;
@@ -487,11 +486,7 @@ int ossl_cms_handle_CAdES_ArchiveTimestampV3Token(X509_ATTRIBUTE *tsattr, X509_S
     unsigned char *imprint;
     unsigned int imprint_len = 0;
 
-    if (!token) {
-        fprintf(stderr, "Could not extract token\n");
-	ERR_print_errors_fp(stderr);
-	goto err;
-    }
+fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
     if (!internal_cms) {
         fprintf(stderr, "Could not extract internal CMS\n");
 	ERR_print_errors_fp(stderr);
@@ -505,11 +500,7 @@ int ossl_cms_handle_CAdES_ArchiveTimestampV3Token(X509_ATTRIBUTE *tsattr, X509_S
      * Note: Since this relies on CAdES background this work is done on CMS structures
      * instead of PKCS7 structures.
      */
-#if 0
-    sinfos = (STACK_OF(CMS_SignerInfo) *)PKCS7_get_signer_info(token);
-#else
     sinfos = CMS_get0_SignerInfos(internal_cms);
-#endif
     if (!sinfos || !sk_CMS_SignerInfo_num(sinfos)) {
         ERR_raise(ERR_LIB_PKCS7, PKCS7_R_NO_SIGNATURES_ON_DATA);
         goto err;
@@ -542,6 +533,7 @@ int ossl_cms_handle_CAdES_ArchiveTimestampV3Token(X509_ATTRIBUTE *tsattr, X509_S
         goto err;
     }
 
+fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
     /*
      * The input for the archive-time-stamp-v3's message imprint computation shall be the concatenation
      * (in the order shown by the list below) of the signed data hash (see bullet 2 below) and certain
@@ -594,6 +586,7 @@ fprintf(stderr, "No embedded content found, external hashing needed\n");
             goto err;
     }
 
+fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
     /*
      * 3) The fields version, sid, digestAlgorithm, signedAttrs, signatureAlgorithm, and signature with
      *    in the SignedData.signerInfos's item corresponding to the signature being archive
@@ -604,6 +597,7 @@ fprintf(stderr, "No embedded content found, external hashing needed\n");
         goto err;
     }
 
+fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
     for (i = 0; i < sk_CMS_SignerInfo_num(sinfos); i++) {
         si = sk_CMS_SignerInfo_value(sinfos, i);
         num = CMS_unsigned_get_attr_count(si);
@@ -641,7 +635,11 @@ fprintf(stderr, "No embedded content found, external hashing needed\n");
                         goto err;
 
                     if (!verify_unsignedAttrValuesHashIndex(md, hashindex, signedData))
+#if 0
                         goto err;
+#else
+                       ;
+#endif
 
                     break;
                 default:
@@ -650,6 +648,7 @@ fprintf(stderr, "No embedded content found, external hashing needed\n");
         }
     }
 
+fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
     if (!EVP_DigestFinal(md_ctx, imprint, NULL))
         goto err;
 
@@ -664,9 +663,14 @@ fprintf(stderr, "No embedded content found, external hashing needed\n");
 	goto err;
     };
 
-    ret = TS_RESP_verify_token(verify_ctx, token);
+fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
+    ret = cms_TS_RESP_verify_token(verify_ctx, internal_cms);
+    if (!ret) {
+        fprintf(stderr, "cms_TS_RESP_verify_token()\n");
+    }
 
 err:
+fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
     if (!ret)
 	ERR_print_errors_fp(stderr);
     TS_VERIFY_CTX_free(verify_ctx);
@@ -678,7 +682,6 @@ err:
     EVP_MD_free(md);
     X509_ALGOR_free(md_alg);
     M_ASN1_free_of(hashindex, CMS_ATSHashIndexV3);
-    M_ASN1_free_of(token, PKCS7);
 
     return ret;
 }
