@@ -272,7 +272,7 @@ static int verify_digest(EVP_MD *md, ASN1_OCTET_STRING *digest, unsigned char *d
         goto err;
 
     if (memcmp(imprint, digest->data, digest->length)) {
-#if 1
+#if 0
         fprintf(stderr, "Digest incorrect\n");
         int i;
         for (i=0; i < digest->length; i++)
@@ -290,26 +290,41 @@ err:
     return ret;
 }
 
+/*
+ * Verify that all certificate hashes that are included in the certificatesHashIndex are indeed
+ * present in the CertificateChoises. If one is missing, the verification fails.
+ * More CertificateChoices might have been added, which still keeps the HashIndex valid, those
+ * certificates are however not protected by this LTA timestamp.
+ */
 static int verify_certificatesHashIndex(EVP_MD *md, CMS_ATSHashIndexV3 *hashindex, CMS_SignedData *signedData) {
-    int k, ret = 0;
+    int j, k, ret = 0;
     ASN1_OCTET_STRING *object = NULL;
     STACK_OF(ASN1_OCTET_STRING) *indexs = hashindex->certificatesHashIndex;
     STACK_OF(CMS_CertificateChoices) *certchoices = signedData->certificates;
-    int numi = sk_ASN1_OCTET_STRING_num(indexs);
-    if (numi != sk_CMS_CertificateChoices_num(certchoices)) {
-        fprintf(stderr, "Number of CertificateChoices does not match hash list: %d != %d\n", numi, sk_CMS_CertificateChoices_num(certchoices));
-        goto err;
-    }
-    for (k = 0; k < numi; k++) {
+    int numhashes = sk_ASN1_OCTET_STRING_num(indexs);
+    int numchoices = sk_CMS_CertificateChoices_num(certchoices);
+    /*
+     * this algorithm is n x m but works for now.
+     */
+    for (k = 0; k < numhashes; k++) {
+        int found = 0;
         ASN1_OCTET_STRING *digest = sk_ASN1_OCTET_STRING_value(indexs, k);
-        CMS_CertificateChoices *cchoice = sk_CMS_CertificateChoices_value(certchoices, numi - 1 - k);
-        object = ASN1_item_pack(cchoice, ASN1_ITEM_rptr(CMS_CertificateChoices), &object);
-        if (object == NULL) {
-            fprintf(stderr, "Failed to pack RevocationInfoChoice\n");
+        for (j = 0; j < numchoices; j++) {
+            CMS_CertificateChoices *cchoice = sk_CMS_CertificateChoices_value(certchoices, j);
+            object = ASN1_item_pack(cchoice, ASN1_ITEM_rptr(CMS_CertificateChoices), &object);
+            if (object == NULL) {
+                fprintf(stderr, "Failed to pack CertificateChoice\n");
+                goto err;
+            }
+            if (!verify_digest(md, digest, object->data, object->length))
+                 continue;
+            found = 1;
+            break;
+        }
+        if (!found) {
+            fprintf(stderr, "certificateHashIndex not found\n");
             goto err;
         }
-        if (!verify_digest(md, digest, object->data, object->length))
-	    goto err;
     }
     ret = 1;
 err:
@@ -317,26 +332,41 @@ err:
     return ret;
 }
 
+/*
+ * Verify that all crl hashes that are included in the crlsHashIndex are indeed
+ * present in the RevocationInfoChoices. If one is missing, the verification fails.
+ * More RevocationInfoChoices might have been added, which still keeps the HashIndex valid, those
+ * crls are however not protected by this LTA timestamp.
+ */
 static int verify_crlsHashIndex(EVP_MD *md, CMS_ATSHashIndexV3 *hashindex, CMS_SignedData *signedData) {
-    int k, ret = 0;
+    int j, k, ret = 0;
     ASN1_OCTET_STRING *object = NULL;
     STACK_OF(ASN1_OCTET_STRING) *indexs = hashindex->crlsHashIndex;
     STACK_OF(CMS_RevocationInfoChoice) *crlchoices = signedData->crls;
-    int numi = sk_ASN1_OCTET_STRING_num(indexs);
-    if (numi != sk_CMS_RevocationInfoChoice_num(crlchoices)) {
-        fprintf(stderr, "Number of RevocationInfoChoice does not match hash list: %d != %d\n", numi, sk_CMS_RevocationInfoChoice_num(crlchoices));
-        goto err;
-    }
-    for (k = 0; k < numi; k++) {
+    int numhashes = sk_ASN1_OCTET_STRING_num(indexs);
+    int numchoices = sk_CMS_RevocationInfoChoice_num(crlchoices);
+    /*
+     * this algorithm is n x m but works for now.
+     */
+    for (k = 0; k < numhashes; k++) {
+        int found = 0;
         ASN1_OCTET_STRING *digest = sk_ASN1_OCTET_STRING_value(indexs, k);
-        CMS_RevocationInfoChoice *ri = sk_CMS_RevocationInfoChoice_value(crlchoices, numi - 1 - k);
-        object = ASN1_item_pack(ri, ASN1_ITEM_rptr(CMS_RevocationInfoChoice), &object);
-        if (object == NULL) {
-            fprintf(stderr, "Failed to pack RevocationInfoChoice\n");
+        for (j = 0; j < numchoices; j++) {
+            CMS_RevocationInfoChoice *ri = sk_CMS_RevocationInfoChoice_value(crlchoices, j);
+            object = ASN1_item_pack(ri, ASN1_ITEM_rptr(CMS_RevocationInfoChoice), &object);
+            if (object == NULL) {
+                fprintf(stderr, "Failed to pack RevocationInfoChoice\n");
+                goto err;
+            }
+            if (!verify_digest(md, digest, object->data, object->length))
+                 continue;
+            found = 1;
+            break;
+        }
+        if (!found) {
+            fprintf(stderr, "crlHashIndex not found\n");
             goto err;
         }
-        if (!verify_digest(md, digest, object->data, object->length))
-	    goto err;
     }
     ret = 1;
 err:
@@ -344,8 +374,14 @@ err:
     return ret;
 }
 
+/*
+ * Verify that all unsigned attribute hashes that are included in the crlsHashIndex are indeed
+ * present in the unsigned attributes. If one is missing, the verification fails.
+ * More unsigned attribues might have been added, which still keeps the HashIndex valid, those
+ * unsigned attributes are however not protected by this LTA timestamp.
+ */
 static int verify_unsignedAttrValuesHashIndex(EVP_MD *md, CMS_ATSHashIndexV3 *hashindex, CMS_SignedData *signedData) {
-    int ret = 0;
+    int j, k, ret = 0;
     unsigned char *content = NULL;
     ASN1_OCTET_STRING *object = NULL;
     STACK_OF(ASN1_OCTET_STRING) *indexs = hashindex->unsignedAttrValuesHashIndex;
@@ -355,51 +391,54 @@ static int verify_unsignedAttrValuesHashIndex(EVP_MD *md, CMS_ATSHashIndexV3 *ha
         goto err;
     }
     CMS_SignerInfo *si = sk_CMS_SignerInfo_value(sinfos, 0);
-    int num = CMS_unsigned_get_attr_count(si);
-    int k, numi = sk_ASN1_OCTET_STRING_num(indexs);
-    if (numi != num - 1) {
-        fprintf(stderr, "Expected the last unsignedAttribute to be the V3...\n");
-        goto err;
-    }
-    for (k = 0; k < num; k++) {
-        ASN1_OCTET_STRING *digest = sk_ASN1_OCTET_STRING_value(indexs, 0);
-        X509_ATTRIBUTE *attr = CMS_unsigned_get_attr(si, num - k - 1);
-        ASN1_OBJECT *obj = X509_ATTRIBUTE_get0_object(attr);
-        object = ASN1_item_pack(obj, ASN1_ITEM_rptr(ASN1_OBJECT), &object);
-        int i, len = object->length;
-        if ((content = OPENSSL_malloc(len)) == NULL) {
-            ERR_raise(ERR_LIB_TS, ERR_R_MALLOC_FAILURE);
-            goto err;
-        };
-        memcpy(content, object->data, object->length);
-
-        int count = X509_ATTRIBUTE_count(attr);
-        if (count == 0) {
-            ERR_raise(ERR_LIB_X509, X509_R_INVALID_ATTRIBUTES);
-            goto err;
-        }
-        for (i = 0; i < count; i++) {
-            ASN1_TYPE *type = X509_ATTRIBUTE_get0_type(attr, i);
-            int tag = ASN1_TYPE_get(type);
-            ASN1_OCTET_STRING *os = X509_ATTRIBUTE_get0_data(attr, i, tag, NULL);
-            unsigned char *newcontent = OPENSSL_realloc(content, len + os->length);
-            if (newcontent == NULL) {
+    int numattrs = CMS_unsigned_get_attr_count(si);
+    int numhashes = sk_ASN1_OCTET_STRING_num(indexs);
+    /*
+     * this algorithm is n x m but works for now.
+     */
+    for (k = 0; k < numhashes; k++) {
+        int found = 0;
+        ASN1_OCTET_STRING *digest = sk_ASN1_OCTET_STRING_value(indexs, k);
+        for (j = 0; j < numattrs; j++) {
+            X509_ATTRIBUTE *attr = CMS_unsigned_get_attr(si, j);
+            ASN1_OBJECT *obj = X509_ATTRIBUTE_get0_object(attr);
+            object = ASN1_item_pack(obj, ASN1_ITEM_rptr(ASN1_OBJECT), &object);
+            int i, len = object->length;
+            if (content)
+                OPENSSL_free(content);
+            if ((content = OPENSSL_malloc(len)) == NULL) {
                 ERR_raise(ERR_LIB_TS, ERR_R_MALLOC_FAILURE);
                 goto err;
+            };
+            memcpy(content, object->data, object->length);
+
+            int count = X509_ATTRIBUTE_count(attr);
+            if (count == 0) {
+                ERR_raise(ERR_LIB_X509, X509_R_INVALID_ATTRIBUTES);
+                goto err;
             }
-            memcpy(newcontent + len, os->data, os->length);
-            content = newcontent;
-            len += os->length;
+            for (i = 0; i < count; i++) {
+                ASN1_TYPE *type = X509_ATTRIBUTE_get0_type(attr, i);
+                int tag = ASN1_TYPE_get(type);
+                ASN1_OCTET_STRING *os = X509_ATTRIBUTE_get0_data(attr, i, tag, NULL);
+                unsigned char *newcontent = OPENSSL_realloc(content, len + os->length);
+                if (newcontent == NULL) {
+                    ERR_raise(ERR_LIB_TS, ERR_R_MALLOC_FAILURE);
+                    goto err;
+                }
+                memcpy(newcontent + len, os->data, os->length);
+                content = newcontent;
+                len += os->length;
+            }
+            if (!verify_digest(md, digest, content, len))
+                continue;
+            found = 1;
+            break;
         }
-        if (!verify_digest(md, digest, content, len)) {
-#if 0
+        if (!found) {
+            fprintf(stderr, "certificateHashIndex not found\n");
             goto err;
-#else
-            ;
-#endif
         }
-        OPENSSL_free(content);
-        content = NULL;
     }
     ret = 1;
 err:
