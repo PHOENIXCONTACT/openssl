@@ -522,7 +522,7 @@ int ossl_cms_handle_CAdES_ArchiveTimestampV3Token(X509_ATTRIBUTE *tsattr, X509_S
     STACK_OF(CMS_SignerInfo) *sinfos;
     ASN1_OBJECT *eContentType = signedData->encapContentInfo->eContentType;
     CMS_ATSHashIndexV3 *hashindex = NULL;
-    unsigned char *imprint;
+    unsigned char *imprint = NULL;
     unsigned int imprint_len = 0;
 
 fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
