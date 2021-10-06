@@ -25,7 +25,7 @@
 
 /* CAdES services */
 
-#if 1
+#if 0
 /* base64 encoder taken from
  * https://opensource.apple.com/source/QuickTimeStreamingServer/QuickTimeStreamingServer-452/CommonUtilitiesLib/base64.c
  */
@@ -175,7 +175,7 @@ int ossl_cms_handle_CAdES_SignatureTimestampToken(X509_ATTRIBUTE *tsattr, X509_S
     EVP_MD_CTX *md_ctx = NULL;
     unsigned char *imprint = NULL;
     unsigned int imprint_len;
-fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
+
     if (!cmstoken) {
         fprintf(stderr, "Could not extract token\n");
 	ERR_print_errors_fp(stderr);
@@ -525,7 +525,7 @@ int ossl_cms_handle_CAdES_ArchiveTimestampV3Token(X509_ATTRIBUTE *tsattr, X509_S
     unsigned char *imprint = NULL;
     unsigned int imprint_len = 0;
 
-fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
+
     if (!internal_cms) {
         fprintf(stderr, "Could not extract internal CMS\n");
 	ERR_print_errors_fp(stderr);
@@ -572,7 +572,6 @@ fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
         goto err;
     }
 
-fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
     /*
      * The input for the archive-time-stamp-v3's message imprint computation shall be the concatenation
      * (in the order shown by the list below) of the signed data hash (see bullet 2 below) and certain
@@ -625,7 +624,6 @@ fprintf(stderr, "No embedded content found, external hashing needed\n");
             goto err;
     }
 
-fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
     /*
      * 3) The fields version, sid, digestAlgorithm, signedAttrs, signatureAlgorithm, and signature with
      *    in the SignedData.signerInfos's item corresponding to the signature being archive
@@ -636,7 +634,6 @@ fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
         goto err;
     }
 
-fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
     for (i = 0; i < sk_CMS_SignerInfo_num(sinfos); i++) {
         si = sk_CMS_SignerInfo_value(sinfos, i);
         num = CMS_unsigned_get_attr_count(si);
@@ -674,11 +671,7 @@ fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
                         goto err;
 
                     if (!verify_unsignedAttrValuesHashIndex(md, hashindex, signedData))
-#if 0
                         goto err;
-#else
-                       ;
-#endif
 
                     break;
                 default:
@@ -687,7 +680,6 @@ fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
         }
     }
 
-fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
     if (!EVP_DigestFinal(md_ctx, imprint, NULL))
         goto err;
 
@@ -703,14 +695,12 @@ fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
 	goto err;
     };
 
-fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
     ret = cms_TS_RESP_verify_token(verify_ctx, internal_cms);
     if (!ret) {
         fprintf(stderr, "cms_TS_RESP_verify_token()\n");
     }
 
 err:
-fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
     if (!ret)
 	ERR_print_errors_fp(stderr);
     TS_VERIFY_CTX_free(verify_ctx);
