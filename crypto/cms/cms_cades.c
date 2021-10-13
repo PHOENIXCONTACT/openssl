@@ -381,7 +381,7 @@ err:
  * unsigned attributes are however not protected by this LTA timestamp.
  */
 static int verify_unsignedAttrValuesHashIndex(EVP_MD *md, CMS_ATSHashIndexV3 *hashindex, CMS_SignedData *signedData) {
-    int j, k, ret = 0;
+    int i, j, k, ret = 0;
     unsigned char *content = NULL;
     ASN1_OCTET_STRING *object = NULL;
     STACK_OF(ASN1_OCTET_STRING) *indexs = hashindex->unsignedAttrValuesHashIndex;
@@ -403,14 +403,7 @@ static int verify_unsignedAttrValuesHashIndex(EVP_MD *md, CMS_ATSHashIndexV3 *ha
             X509_ATTRIBUTE *attr = CMS_unsigned_get_attr(si, j);
             ASN1_OBJECT *obj = X509_ATTRIBUTE_get0_object(attr);
             object = ASN1_item_pack(obj, ASN1_ITEM_rptr(ASN1_OBJECT), &object);
-            int i, len = object->length;
-            if (content)
-                OPENSSL_free(content);
-            if ((content = OPENSSL_malloc(len)) == NULL) {
-                ERR_raise(ERR_LIB_TS, ERR_R_MALLOC_FAILURE);
-                goto err;
-            };
-            memcpy(content, object->data, object->length);
+            int len = object->length;
 
             int count = X509_ATTRIBUTE_count(attr);
             if (count == 0) {
@@ -421,6 +414,13 @@ static int verify_unsignedAttrValuesHashIndex(EVP_MD *md, CMS_ATSHashIndexV3 *ha
                 ASN1_TYPE *type = X509_ATTRIBUTE_get0_type(attr, i);
                 int tag = ASN1_TYPE_get(type);
                 ASN1_OCTET_STRING *os = X509_ATTRIBUTE_get0_data(attr, i, tag, NULL);
+                if (content)
+                    OPENSSL_free(content);
+                if ((content = OPENSSL_malloc(len)) == NULL) {
+                    ERR_raise(ERR_LIB_TS, ERR_R_MALLOC_FAILURE);
+                    goto err;
+                };
+                memcpy(content, object->data, object->length);
                 unsigned char *newcontent = OPENSSL_realloc(content, len + os->length);
                 if (newcontent == NULL) {
                     ERR_raise(ERR_LIB_TS, ERR_R_MALLOC_FAILURE);
@@ -428,12 +428,13 @@ static int verify_unsignedAttrValuesHashIndex(EVP_MD *md, CMS_ATSHashIndexV3 *ha
                 }
                 memcpy(newcontent + len, os->data, os->length);
                 content = newcontent;
-                len += os->length;
+                if (!verify_digest(md, digest, content, len + os->length))
+                    continue;
+                found = 1;
+                break;
             }
-            if (!verify_digest(md, digest, content, len))
-                continue;
-            found = 1;
-            break;
+            if (found)
+                break;
         }
         if (!found) {
             fprintf(stderr, "certificateHashIndex not found\n");
