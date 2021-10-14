@@ -448,6 +448,33 @@ err:
     return ret;
 }
 
+static int hash_embedded_content(EVP_MD *md, unsigned char *digest, unsigned int *mlen, ASN1_OCTET_STRING *eContent) {
+    int ret = 0;
+    EVP_MD_CTX *md_ctx = EVP_MD_CTX_new();
+
+    if (md_ctx == NULL) {
+        ERR_raise(ERR_LIB_CMS, ERR_R_MALLOC_FAILURE);
+        goto err;
+    }
+
+    if (!EVP_DigestInit(md_ctx, md))
+        goto err;
+
+    if (!EVP_DigestUpdate(md_ctx, eContent->data, eContent->length))
+        goto err;
+
+    if (EVP_DigestFinal(md_ctx, digest, mlen) <= 0) {
+        ERR_raise(ERR_LIB_CMS, CMS_R_UNABLE_TO_FINALIZE_CONTEXT);
+        goto err;
+    }
+
+    printhex("eContent", digest, *mlen);
+    ret = 1;
+err:
+    EVP_MD_CTX_free(md_ctx);
+    return ret;
+}
+
 static int hash_external_content(X509_ALGOR *md_alg, unsigned char *digest, unsigned int *mlen, BIO *chain) {
     int ret = 0;
     EVP_MD_CTX *md_ctx = EVP_MD_CTX_new();
@@ -608,22 +635,22 @@ int ossl_cms_handle_CAdES_ArchiveTimestampV3Token(X509_ATTRIBUTE *tsattr, X509_S
      * 2) The octets representing the hash of the signed data
      */
     ASN1_OCTET_STRING *eContent = signedData->encapContentInfo->eContent;
+    unsigned int mlen;
+    unsigned char digest[EVP_MAX_MD_SIZE];
     if (eContent != NULL) {
-fprintf(stderr, "Embedded content found, would need to calculate hash. Legnth=%d\n", eContent->length);
-        goto err;
+        if (!hash_embedded_content(md, digest, &mlen, eContent))
+            goto err;
     } else {
-fprintf(stderr, "No embedded content found, external hashing needed\n");
-        unsigned int mlen;
-        unsigned char digest[EVP_MAX_MD_SIZE];
         if (!hash_external_content(md_alg, digest, &mlen, cmsbio))
             goto err;
-        if (mlen != imprint_len) {
-            fprintf(stderr, "Digest length mismatch: mlen=%d != imprint_len=%d\n", mlen, imprint_len);
-            goto err;
-        }
-        if (!EVP_DigestUpdate(md_ctx, digest, mlen))
-            goto err;
     }
+    if (mlen != imprint_len) {
+        fprintf(stderr, "Digest length mismatch: mlen=%d != imprint_len=%d\n", mlen, imprint_len);
+        goto err;
+    }
+    if (!EVP_DigestUpdate(md_ctx, digest, mlen))
+        goto err;
+
 
     /*
      * 3) The fields version, sid, digestAlgorithm, signedAttrs, signatureAlgorithm, and signature with
