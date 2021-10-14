@@ -42,6 +42,7 @@ typedef enum OPTION_choice {
     OPT_TO, OPT_FROM, OPT_SUBJECT, OPT_SIGNER, OPT_RECIP, OPT_MD,
     OPT_CIPHER, OPT_INKEY, OPT_KEYFORM, OPT_CERTFILE, OPT_CAFILE,
     OPT_CAPATH, OPT_CASTORE, OPT_NOCAFILE, OPT_NOCAPATH, OPT_NOCASTORE,
+    OPT_CODE_SIGN,
     OPT_R_ENUM, OPT_PROV_ENUM, OPT_CONFIG,
     OPT_V_ENUM,
     OPT_IN, OPT_INFORM, OPT_OUT,
@@ -98,6 +99,8 @@ const OPTIONS smime_options[] = {
 
     {"certfile", OPT_CERTFILE, '<', "Other certificates file"},
     {"recip", OPT_RECIP, '<', "Recipient certificate file for decryption"},
+
+    {"codesign", OPT_CODE_SIGN, '-', "Verify signers certificate against purpose code signing"},
 
     OPT_SECTION("Email"),
     {"to", OPT_TO, 's', "To address"},
@@ -234,6 +237,9 @@ int smime_main(int argc, char **argv)
             break;
         case OPT_NOSIGS:
             flags |= PKCS7_NOSIGS;
+            break;
+        case OPT_CODE_SIGN:
+            flags |= PKCS7_PURPOSE_CODE_SIGN;
             break;
         case OPT_STREAM:
         case OPT_INDEF:
