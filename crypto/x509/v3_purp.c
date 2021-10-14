@@ -32,6 +32,8 @@ static int check_purpose_crl_sign(const X509_PURPOSE *xp, const X509 *x,
                                   int require_ca);
 static int check_purpose_timestamp_sign(const X509_PURPOSE *xp, const X509 *x,
                                         int require_ca);
+static int check_purpose_code_sign(const X509_PURPOSE *xp, const X509 *x,
+                                        int require_ca);
 static int no_check_purpose(const X509_PURPOSE *xp, const X509 *x,
                             int require_ca);
 static int check_purpose_ocsp_helper(const X509_PURPOSE *xp, const X509 *x,
@@ -60,6 +62,9 @@ static X509_PURPOSE xstandard[] = {
      "OCSP helper", "ocsphelper", NULL},
     {X509_PURPOSE_TIMESTAMP_SIGN, X509_TRUST_TSA, 0,
      check_purpose_timestamp_sign, "Time Stamp signing", "timestampsign",
+     NULL},
+    {X509_PURPOSE_CODE_SIGN, X509_TRUST_OBJECT_SIGN, 0,
+     check_purpose_code_sign, "Code signing", "codesign",
      NULL},
 };
 
@@ -881,6 +886,45 @@ static int check_purpose_timestamp_sign(const X509_PURPOSE *xp, const X509 *x,
     }
 
     return 1;
+}
+
+/* common code signing checks */
+static int purpose_code_sign(const X509 *x, int require_ca)
+{
+    if (xku_reject(x, XKU_CODE_SIGN))
+        return 0;
+    if (require_ca) {
+        int ca_ret;
+        ca_ret = check_ca(x);
+        if (ca_ret == 0)
+            return 0;
+        /* Check nsCertType if present */
+        if (ca_ret != 5 || x->ex_nscert & NS_OBJSIGN_CA)
+            return ca_ret;
+        else
+            return 0;
+    }
+    if (x->ex_flags & EXFLAG_NSCERT) {
+        if (x->ex_nscert & NS_OBJSIGN)
+            return 1;
+        /* Workaround for some buggy certificates */
+        if (x->ex_nscert & NS_SSL_CLIENT)
+            return 2;
+        return 0;
+    }
+    return 1;
+}
+
+static int check_purpose_code_sign(const X509_PURPOSE *xp, const X509 *x,
+                                    int require_ca)
+{
+    int ret;
+    ret = purpose_code_sign(x, require_ca);
+    if (!ret || require_ca)
+        return ret;
+    if (ku_reject(x, KU_DIGITAL_SIGNATURE | KU_NON_REPUDIATION))
+        return 0;
+    return ret;
 }
 
 static int no_check_purpose(const X509_PURPOSE *xp, const X509 *x,
