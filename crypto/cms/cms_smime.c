@@ -262,7 +262,8 @@ static int cms_signerinfo_verify_cert(CMS_SignerInfo *si,
                                       STACK_OF(X509) *certs,
                                       STACK_OF(X509_CRL) *crls,
                                       STACK_OF(X509) **chain,
-                                      const CMS_CTX *cms_ctx)
+                                      const CMS_CTX *cms_ctx,
+                                      const char *purpose)
 {
     X509_STORE_CTX *ctx;
     X509 *signer;
@@ -279,7 +280,7 @@ static int cms_signerinfo_verify_cert(CMS_SignerInfo *si,
         ERR_raise(ERR_LIB_CMS, CMS_R_STORE_INIT_ERROR);
         goto err;
     }
-    X509_STORE_CTX_set_default(ctx, "smime_sign");
+    X509_STORE_CTX_set_default(ctx, purpose);
     if (crls != NULL)
         X509_STORE_CTX_set0_crls(ctx, crls);
 
@@ -314,6 +315,7 @@ int CMS_verify(CMS_ContentInfo *cms, STACK_OF(X509) *certs,
     BIO *cmsbio = NULL, *tmpin = NULL, *tmpout = NULL;
     int cadesVerify = (flags & CMS_CADES) != 0;
     const CMS_CTX *ctx = ossl_cms_get0_cmsctx(cms);
+    const char *purpose;
 
     if (dcont == NULL && !check_content(cms))
         return 0;
@@ -352,6 +354,10 @@ int CMS_verify(CMS_ContentInfo *cms, STACK_OF(X509) *certs,
     /* at this point scount == sk_CMS_SignerInfo_num(sinfos) */
 
     if ((flags & CMS_NO_SIGNER_CERT_VERIFY) == 0 || cadesVerify) {
+        if (flags & CMS_PURPOSE_CODE_SIGN)
+            purpose = "code_sign";
+        else
+            purpose = "smime_sign";
         if (cadesVerify) {
             /* Certificate trust chain is required to check CAdES signature */
             si_chains = OPENSSL_zalloc(scount * sizeof(si_chains[0]));
@@ -368,7 +374,7 @@ int CMS_verify(CMS_ContentInfo *cms, STACK_OF(X509) *certs,
 
             if (!cms_signerinfo_verify_cert(si, store, cms_certs, crls,
                                             si_chains ? &si_chains[i] : NULL,
-                                            ctx))
+                                            ctx, purpose))
                 goto err;
         }
     }

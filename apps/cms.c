@@ -80,6 +80,7 @@ typedef enum OPTION_choice {
     OPT_CERTSOUT, OPT_MD, OPT_INKEY, OPT_KEYFORM, OPT_KEYOPT, OPT_RR_FROM,
     OPT_RR_TO, OPT_AES128_WRAP, OPT_AES192_WRAP, OPT_AES256_WRAP,
     OPT_3DES_WRAP, OPT_WRAP, OPT_ENGINE,
+    OPT_PURPOSE_CODE_SIGN,
     OPT_R_ENUM,
     OPT_PROV_ENUM, OPT_CONFIG,
     OPT_V_ENUM,
@@ -216,6 +217,8 @@ const OPTIONS cms_options[] = {
      "Do not load certificates from the default certificates directory"},
     {"no-CAstore", OPT_NOCASTORE, '-',
      "Do not load certificates from the default certificates store"},
+    {"codesign", OPT_PURPOSE_CODE_SIGN, '-',
+     "Verify signers certificate against purpose code signing"},
 
     OPT_SECTION("Output"),
     {"keyid", OPT_KEYID, '-', "Use subject key identifier"},
@@ -491,6 +494,9 @@ int cms_main(int argc, char **argv)
             break;
         case OPT_NOCASTORE:
             noCAstore = 1;
+            break;
+        case OPT_PURPOSE_CODE_SIGN:
+            flags |= CMS_PURPOSE_CODE_SIGN;
             break;
         case OPT_IN:
             infile = opt_arg();
