@@ -178,7 +178,7 @@ fprintf(stderr, "%s: %d\n", __FUNCTION__, __LINE__);
     }
     if (!X509_STORE_CTX_init(cert_ctx, store, signer, untrusted))
         goto end;
-    X509_STORE_CTX_set_purpose(cert_ctx, X509_PURPOSE_TIMESTAMP_SIGN);
+    X509_STORE_CTX_set_purpose_ex(cert_ctx, X509_PURPOSE_TIMESTAMP_SIGN, 1);
     i = X509_verify_cert(cert_ctx);
     if (i <= 0) {
         int j = X509_STORE_CTX_get_error(cert_ctx);
